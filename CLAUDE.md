@@ -24,11 +24,31 @@ Spring Boot 4.0.5
 Spring Boot 4.0 application (Java 21) for a grocery store. Uses Maven wrapper (`./mvnw`).
 **Testing:** JUnit 5 via Spring Boot test starters (JPA test, Security test, Web MVC test). Lombok annotation processing
 is configured for both main and test compilation.
-Follow a **Domain-Oriented (Modular) Architecture** — organize code by functional feature (e.g., `products`, `sales`)
+Follow a **Domain-Oriented (Modular) Architecture** — organize code by functional feature (one aggregate per module)
 rather than by technical layer.
 **Internal module structure:** Each module contains `web`, `application`, `domain`, and `infrastructure` sub-packages.
 **Dependency management:** Use constructor-based injection for all required dependencies.
 **Data flow:** Use DTOs for the API layer; do not expose JPA entities directly.
+
+### Module Map
+
+One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
+
+| Module          | Entities                                          |
+|-----------------|---------------------------------------------------|
+| `stores`        | `Store`                                           |
+| `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` |
+| `users`         | `User`                                            |
+| `products`      | `Product`                                         |
+| `customers`     | `Customer`, `CustomerPayment`                     |
+| `sales`         | `Sale`, `SaleItem`, `SaleCancellation`            |
+| `inventory`     | `InventoryMovement`                               |
+| `notifications` | `Notification`                                    |
+
+### FK Strategy (bounded-context friendly)
+
+- **Same module (same aggregate):** `@ManyToOne(fetch = LAZY)` with `@JoinColumn`. Example: `SaleItem.sale`, `CustomerPayment.customer`, `Subscription.plan`, `SaleCancellation.sale` (`@OneToOne` via UNIQUE).
+- **Cross-module FKs:** plain `UUID` field (no JPA association). Examples: `storeId`, `userId`, `productId`, `customerId`, `saleId`, `canceledBy`, `referenceId`. Resolve via repositories when needed.
 
 ## SOLID Principles
 
@@ -43,9 +63,16 @@ Strictly adhere to SOLID in every implementation:
 ## Implementation Guidelines
 
 - **Database Source of Truth:** Always read and align to `src/main/resources/script.sql` for the database schema, multi-tenancy rules (`store_id`), PostgreSQL triggers, views, and integrity constraints. Do not duplicate trigger logic in Java.
+- **Schema validation:** `spring.jpa.hibernate.ddl-auto=validate` — entity mappings must match `script.sql` exactly; Hibernate will never alter the schema.
+- **DB connection:** Configured in `src/main/resources/application.properties` via env vars `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
-- **Boilerplate:** Use Lombok (`@Data`, `@Builder`, `@RequiredArgsConstructor`).
-- **Validation:** Apply Bean Validation on all DTOs.
+- **Boilerplate:** Use Lombok. For entities: `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on entities** (breaks with lazy proxies). For services/components prefer `@RequiredArgsConstructor` with `final` fields.
+- **Validation:** Apply Bean Validation on all DTOs and entities.
+- **Entity conventions:**
+  - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety net.
+  - Types: `TIMESTAMPTZ` → `OffsetDateTime`, `DATE` → `LocalDate`, `NUMERIC(10,2)` → `BigDecimal`.
+  - DB-filled timestamps (`created_at`, `updated_at`, `paid_at`): `@Column(insertable = false, updatable = false)`. **Do not** add `@PrePersist` — triggers/defaults own this.
+  - Enums: one Java `enum` per CHECK constraint, mapped with `@Enumerated(EnumType.STRING)`, colocated in the same `domain` package.
 - **Best Practices:** Always prioritize patterns defined in `.claude/skills/java-springboot/SKILL.md`.
 
 ## Expected Output Format
