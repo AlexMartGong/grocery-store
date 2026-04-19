@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -34,6 +35,12 @@ public class Store {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @NotBlank
+    @Size(min = 3, max = 30)
+    @Pattern(regexp = "^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$")
+    @Column(nullable = false, length = 30, unique = true)
+    private String code;
 
     @NotBlank
     @Size(max = 150)

@@ -28,6 +28,8 @@ CREATE TABLE subscription_plans
 CREATE TABLE stores
 (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code       VARCHAR(30)  NOT NULL UNIQUE
+        CHECK (code ~ '^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$'),
     name       VARCHAR(150) NOT NULL,
     owner_name VARCHAR(150),
     whatsapp   VARCHAR(20),
@@ -64,6 +66,19 @@ CREATE TABLE saas_payments
     period_end     DATE,
     paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     notes          TEXT
+);
+
+-- SaaS platform administrators (no store affiliation)
+CREATE TABLE admin_users
+(
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username      VARCHAR(50)  NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name     VARCHAR(150) NOT NULL,
+    role          VARCHAR(20)  NOT NULL DEFAULT 'SUPER_ADMIN'
+        CHECK (role IN ('SUPER_ADMIN')),
+    active        BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 

@@ -1,5 +1,6 @@
 package com.amx.grocerystore.core.security;
 
+import com.amx.grocerystore.admin.domain.AdminUser;
 import com.amx.grocerystore.users.domain.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
@@ -17,6 +18,7 @@ public class JwtService {
 
     public static final String CLAIM_STORE_ID = "storeId";
     public static final String CLAIM_USER_ID = "userId";
+    public static final String CLAIM_ADMIN_ID = "adminId";
     public static final String CLAIM_ROLE = "role";
 
     private final JwtProperties properties;
@@ -36,6 +38,20 @@ public class JwtService {
                 .claim(CLAIM_STORE_ID, user.getStoreId().toString())
                 .claim(CLAIM_USER_ID, user.getId().toString())
                 .claim(CLAIM_ROLE, user.getRole().name())
+                .issuedAt(java.util.Date.from(now))
+                .expiration(java.util.Date.from(exp))
+                .signWith(signingKey, Jwts.SIG.HS256)
+                .compact();
+    }
+
+    public String generateAdminToken(AdminUser admin) {
+        Instant now = Instant.now();
+        Instant exp = now.plus(properties.expirationMinutes(), ChronoUnit.MINUTES);
+        return Jwts.builder()
+                .issuer(properties.issuer())
+                .subject(admin.getUsername())
+                .claim(CLAIM_ADMIN_ID, admin.getId().toString())
+                .claim(CLAIM_ROLE, admin.getRole().name())
                 .issuedAt(java.util.Date.from(now))
                 .expiration(java.util.Date.from(exp))
                 .signWith(signingKey, Jwts.SIG.HS256)

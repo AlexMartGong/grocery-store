@@ -1,5 +1,6 @@
 package com.amx.grocerystore.core.security;
 
+import com.amx.grocerystore.admin.domain.AdminRole;
 import com.amx.grocerystore.users.domain.UserRole;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -38,13 +39,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = header.substring(BEARER_PREFIX.length()).trim();
         try {
             Claims claims = jwtService.parse(token).getPayload();
-            UserPrincipal principal = new UserPrincipal(
-                    UUID.fromString(claims.get(JwtService.CLAIM_USER_ID, String.class)),
-                    UUID.fromString(claims.get(JwtService.CLAIM_STORE_ID, String.class)),
-                    claims.getSubject(),
-                    UserRole.valueOf(claims.get(JwtService.CLAIM_ROLE, String.class))
-            );
-            SecurityContextHolder.getContext().setAuthentication(new TenantAuthenticationToken(principal));
+            String adminId = claims.get(JwtService.CLAIM_ADMIN_ID, String.class);
+            if (adminId != null) {
+                AdminPrincipal principal = new AdminPrincipal(
+                        UUID.fromString(adminId),
+                        claims.getSubject(),
+                        AdminRole.valueOf(claims.get(JwtService.CLAIM_ROLE, String.class))
+                );
+                SecurityContextHolder.getContext().setAuthentication(new AdminAuthenticationToken(principal));
+            } else {
+                UserPrincipal principal = new UserPrincipal(
+                        UUID.fromString(claims.get(JwtService.CLAIM_USER_ID, String.class)),
+                        UUID.fromString(claims.get(JwtService.CLAIM_STORE_ID, String.class)),
+                        claims.getSubject(),
+                        UserRole.valueOf(claims.get(JwtService.CLAIM_ROLE, String.class))
+                );
+                SecurityContextHolder.getContext().setAuthentication(new TenantAuthenticationToken(principal));
+            }
         } catch (JwtException | IllegalArgumentException ex) {
             SecurityContextHolder.clearContext();
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "invalid_token");
