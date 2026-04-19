@@ -42,6 +42,7 @@ Strictly adhere to SOLID in every implementation:
 
 ## Implementation Guidelines
 
+- **Database Source of Truth:** Always read and align to `src/main/resources/script.sql` for the database schema, multi-tenancy rules (`store_id`), PostgreSQL triggers, views, and integrity constraints. Do not duplicate trigger logic in Java.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok (`@Data`, `@Builder`, `@RequiredArgsConstructor`).
 - **Validation:** Apply Bean Validation on all DTOs.
