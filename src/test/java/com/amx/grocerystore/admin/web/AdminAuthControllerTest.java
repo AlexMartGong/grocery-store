@@ -1,6 +1,7 @@
 package com.amx.grocerystore.admin.web;
 
 import com.amx.grocerystore.admin.application.AdminAuthService;
+import com.amx.grocerystore.core.security.JwtAuthenticationEntryPoint;
 import com.amx.grocerystore.core.security.JwtAuthenticationFilter;
 import com.amx.grocerystore.core.security.SecurityConfig;
 import com.amx.grocerystore.users.web.dto.LoginResponse;
@@ -35,6 +36,9 @@ class AdminAuthControllerTest {
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @MockitoBean
+    private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
 
     private static final String URL = "/api/v1/admin/login";
 

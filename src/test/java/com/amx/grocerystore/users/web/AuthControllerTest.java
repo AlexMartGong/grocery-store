@@ -1,5 +1,6 @@
 package com.amx.grocerystore.users.web;
 
+import com.amx.grocerystore.core.security.JwtAuthenticationEntryPoint;
 import com.amx.grocerystore.core.security.JwtAuthenticationFilter;
 import com.amx.grocerystore.core.security.SecurityConfig;
 import com.amx.grocerystore.users.application.AuthService;
@@ -36,6 +37,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @MockitoBean
+    private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
 
     private static final String URL = "/api/v1/auth/login";
 
