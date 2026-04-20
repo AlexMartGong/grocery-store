@@ -57,6 +57,28 @@ Two separate auth flows share the same JWT secret and filter:
 
 `JwtAuthenticationFilter` distinguishes by presence of `adminId` claim. Never add `storeId` to admin tokens.
 
+**Per-request state revalidation:** the filter re-queries the DB on every authenticated request.
+Store-user tokens: `User.findById` + `Store.findById(user.storeId)` — reject if `!user.active`, user missing,
+`store.status != ACTIVE`, or store missing.
+Admin tokens: `AdminUser.findById` — reject if `!admin.active` or admin missing.
+Rejection delegates to `JwtAuthenticationEntryPoint`, which writes a JSON `ErrorResponse` with 401.
+The filter throws `AccountInactiveException(code)` for revoked state; claim/signature parse failures throw
+`InsufficientAuthenticationException("invalid_token")`.
+
+**Exception handling:** `core.web.GlobalExceptionHandler` is the single `@RestControllerAdvice` (no per-controller
+advices).
+Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). Factories: `ErrorResponse.of(code)`,
+`ErrorResponse.validation(fields)`.
+
+| Exception                         | Status | `error` code                                                            |
+|-----------------------------------|--------|-------------------------------------------------------------------------|
+| `BadCredentialsException`         | 401    | `invalid_credentials`                                                   |
+| `DisabledException`               | 403    | message (e.g. `store_inactive`)                                         |
+| `AccessDeniedException`           | 403    | `forbidden`                                                             |
+| `AuthenticationException` (rest)  | 401    | `unauthenticated`                                                       |
+| `MethodArgumentNotValidException` | 400    | `validation_failed` + `fields`                                          |
+| Filter-layer (via entry point)    | 401    | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
+
 Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-users.sql`.
 
 ### FK Strategy (bounded-context friendly)

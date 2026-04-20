@@ -193,7 +193,7 @@ class JwtAuthenticationFilterTest {
     @Test
     void adminToken_happyPath_setsAdminAuthentication() throws Exception {
         UUID adminId = UUID.randomUUID();
-        givenAdminClaims(adminId, "alex");
+        givenAdminClaims(adminId);
         given(adminUserRepository.findById(adminId)).willReturn(Optional.of(activeAdmin(adminId)));
 
         filter.doFilter(request, response, chain);
@@ -209,7 +209,7 @@ class JwtAuthenticationFilterTest {
     @Test
     void adminToken_adminDeactivated_rejectsAdminInactive() throws Exception {
         UUID adminId = UUID.randomUUID();
-        givenAdminClaims(adminId, "alex");
+        givenAdminClaims(adminId);
         AdminUser admin = activeAdmin(adminId);
         admin.setActive(false);
         given(adminUserRepository.findById(adminId)).willReturn(Optional.of(admin));
@@ -222,7 +222,7 @@ class JwtAuthenticationFilterTest {
     @Test
     void adminToken_adminMissingInDb_rejectsAdminInactive() throws Exception {
         UUID adminId = UUID.randomUUID();
-        givenAdminClaims(adminId, "alex");
+        givenAdminClaims(adminId);
         given(adminUserRepository.findById(adminId)).willReturn(Optional.empty());
 
         filter.doFilter(request, response, chain);
@@ -246,13 +246,13 @@ class JwtAuthenticationFilterTest {
     }
 
     @SuppressWarnings("unchecked")
-    private void givenAdminClaims(UUID adminId, String subject) {
+    private void givenAdminClaims(UUID adminId) {
         givenBearer();
         given(jwtService.parse(TOKEN)).willReturn(jws);
         given(jws.getPayload()).willReturn(claims);
         given(claims.get(JwtService.CLAIM_ADMIN_ID, String.class)).willReturn(adminId.toString());
         given(claims.get(JwtService.CLAIM_ROLE, String.class)).willReturn(AdminRole.SUPER_ADMIN.name());
-        given(claims.getSubject()).willReturn(subject);
+        given(claims.getSubject()).willReturn("alex");
     }
 
     private void assertRejected(String expectedCode) throws Exception {
