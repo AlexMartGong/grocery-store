@@ -17,4 +17,16 @@ public record AppCorsProperties(
         boolean allowCredentials,
         @Min(0) long maxAge
 ) {
+    public AppCorsProperties {
+        if (allowCredentials && allowedOrigins.stream().anyMatch(o -> o.contains("*"))) {
+            throw new IllegalStateException(
+                    "app.cors: allowCredentials=true is incompatible with wildcard origin");
+        }
+        allowedOrigins.forEach(o -> {
+            if (!o.startsWith("https://") && !o.startsWith("http://localhost")) {
+                throw new IllegalStateException(
+                        "app.cors.allowed-origins must use https:// (or http://localhost): " + o);
+            }
+        });
+    }
 }
