@@ -36,6 +36,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 
 | Module          | Entities                                          |
 |-----------------|---------------------------------------------------|
+| `admin`         | `AdminUser`                                       |
 | `stores`        | `Store`                                           |
 | `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` |
 | `users`         | `User`                                            |
@@ -45,10 +46,25 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 | `inventory`     | `InventoryMovement`                               |
 | `notifications` | `Notification`                                    |
 
+### Auth Architecture
+
+Two separate auth flows share the same JWT secret and filter:
+
+| Actor       | Endpoint                   | Token claims                                    | Spring principal                              |
+|-------------|----------------------------|-------------------------------------------------|-----------------------------------------------|
+| Store users | `POST /api/v1/auth/login`  | `storeId`, `userId`, `role` (`OWNER`/`CASHIER`) | `UserPrincipal` → `TenantAuthenticationToken` |
+| SaaS admins | `POST /api/v1/admin/login` | `adminId`, `role` (`SUPER_ADMIN`)               | `AdminPrincipal` → `AdminAuthenticationToken` |
+
+`JwtAuthenticationFilter` distinguishes by presence of `adminId` claim. Never add `storeId` to admin tokens.
+
+Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-users.sql`.
+
 ### FK Strategy (bounded-context friendly)
 
-- **Same module (same aggregate):** `@ManyToOne(fetch = LAZY)` with `@JoinColumn`. Example: `SaleItem.sale`, `CustomerPayment.customer`, `Subscription.plan`, `SaleCancellation.sale` (`@OneToOne` via UNIQUE).
-- **Cross-module FKs:** plain `UUID` field (no JPA association). Examples: `storeId`, `userId`, `productId`, `customerId`, `saleId`, `canceledBy`, `referenceId`. Resolve via repositories when needed.
+- **Same module (same aggregate):** `@ManyToOne(fetch = LAZY)` with `@JoinColumn`. Example: `SaleItem.sale`,
+  `CustomerPayment.customer`, `Subscription.plan`, `SaleCancellation.sale` (`@OneToOne` via UNIQUE).
+- **Cross-module FKs:** plain `UUID` field (no JPA association). Examples: `storeId`, `userId`, `productId`,
+  `customerId`, `saleId`, `canceledBy`, `referenceId`. Resolve via repositories when needed.
 
 ## SOLID Principles
 
@@ -62,17 +78,26 @@ Strictly adhere to SOLID in every implementation:
 
 ## Implementation Guidelines
 
-- **Database Source of Truth:** Always read and align to `src/main/resources/script.sql` for the database schema, multi-tenancy rules (`store_id`), PostgreSQL triggers, views, and integrity constraints. Do not duplicate trigger logic in Java.
-- **Schema validation:** `spring.jpa.hibernate.ddl-auto=validate` — entity mappings must match `script.sql` exactly; Hibernate will never alter the schema.
-- **DB connection:** Configured in `src/main/resources/application.properties` via env vars `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
+- **Database Source of Truth:** Always read and align to `src/main/resources/script.sql` for the database schema,
+  multi-tenancy rules (`store_id`), PostgreSQL triggers, views, and integrity constraints. Do not duplicate trigger
+  logic in Java.
+- **Schema validation:** `spring.jpa.hibernate.ddl-auto=validate` — entity mappings must match `script.sql` exactly;
+  Hibernate will never alter the schema.
+- **DB connection:** Configured in `src/main/resources/application.properties` via env vars `DB_HOST`, `DB_PORT`,
+  `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
-- **Boilerplate:** Use Lombok. For entities: `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on entities** (breaks with lazy proxies). For services/components prefer `@RequiredArgsConstructor` with `final` fields.
+- **Boilerplate:** Use Lombok. For entities:
+  `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on
+  entities** (breaks with lazy proxies). For services/components prefer `@RequiredArgsConstructor` with `final` fields.
 - **Validation:** Apply Bean Validation on all DTOs and entities.
 - **Entity conventions:**
-  - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety net.
-  - Types: `TIMESTAMPTZ` → `OffsetDateTime`, `DATE` → `LocalDate`, `NUMERIC(10,2)` → `BigDecimal`.
-  - DB-filled timestamps (`created_at`, `updated_at`, `paid_at`): `@Column(insertable = false, updatable = false)`. **Do not** add `@PrePersist` — triggers/defaults own this.
-  - Enums: one Java `enum` per CHECK constraint, mapped with `@Enumerated(EnumType.STRING)`, colocated in the same `domain` package.
+    - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety
+      net.
+    - Types: `TIMESTAMPTZ` → `OffsetDateTime`, `DATE` → `LocalDate`, `NUMERIC(10,2)` → `BigDecimal`.
+    - DB-filled timestamps (`created_at`, `updated_at`, `paid_at`): `@Column(insertable = false, updatable = false)`. *
+      *Do not** add `@PrePersist` — triggers/defaults own this.
+    - Enums: one Java `enum` per CHECK constraint, mapped with `@Enumerated(EnumType.STRING)`, colocated in the same
+      `domain` package.
 - **Best Practices:** Always prioritize patterns defined in `.claude/skills/java-springboot/SKILL.md`.
 
 ## Expected Output Format
