@@ -24,4 +24,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Page<User> findByStoreIdAndActiveAndRole(UUID storeId, boolean active, UserRole role, Pageable pageable);
 
     boolean existsByStoreIdAndUsername(UUID storeId, String username);
+
+    boolean existsByStoreIdAndRoleAndActiveTrue(UUID storeId, UserRole role);
 }

@@ -2,6 +2,7 @@ package com.amx.grocerystore.core.web;
 
 import com.amx.grocerystore.core.web.dto.ErrorResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -64,6 +65,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DuplicateResourceException.class)
     public ResponseEntity<ErrorResponse> handleDuplicate(DuplicateResourceException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(InvalidResourceStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidState(InvalidResourceStateException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(ex.getCode()));
     }

@@ -3,7 +3,11 @@ package com.amx.grocerystore.users.application;
 import com.amx.grocerystore.core.security.SecurityUtils;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.stores.domain.Store;
+import com.amx.grocerystore.stores.domain.StoreStatus;
+import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import com.amx.grocerystore.users.domain.User;
 import com.amx.grocerystore.users.domain.UserRole;
 import com.amx.grocerystore.users.infrastructure.UserRepository;
@@ -24,23 +28,29 @@ import java.util.UUID;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final StoreRepository storeRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Transactional
     public UserResponse create(CreateUserRequest request) {
         UUID storeId = SecurityUtils.currentStoreId();
-        if (userRepository.existsByStoreIdAndUsername(storeId, request.username())) {
-            throw DuplicateResourceException.username(request.username());
+        return persistNewUser(storeId, request);
+    }
+
+    @Transactional
+    public UserResponse provisionUserForStore(UUID storeId, CreateUserRequest request) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        if (store.getStatus() != StoreStatus.ACTIVE) {
+            throw InvalidResourceStateException.storeNotActive(storeId);
         }
-        User user = User.builder()
-                .storeId(storeId)
-                .fullName(request.fullName())
-                .username(request.username())
-                .passwordHash(passwordEncoder.encode(request.password()))
-                .role(request.role())
-                .active(true)
-                .build();
-        return UserResponse.from(userRepository.save(user));
+        if (request.role() != UserRole.OWNER) {
+            throw InvalidResourceStateException.roleNotAllowedForProvisioning(request.role());
+        }
+        if (userRepository.existsByStoreIdAndRoleAndActiveTrue(storeId, UserRole.OWNER)) {
+            throw DuplicateResourceException.storeOwner(storeId);
+        }
+        return persistNewUser(storeId, request);
     }
 
     @Transactional(readOnly = true)
@@ -97,5 +107,20 @@ public class UserService {
         }
         user.setActive(false);
         userRepository.save(user);
+    }
+
+    private UserResponse persistNewUser(UUID storeId, CreateUserRequest request) {
+        if (userRepository.existsByStoreIdAndUsername(storeId, request.username())) {
+            throw DuplicateResourceException.username(request.username());
+        }
+        User user = User.builder()
+                .storeId(storeId)
+                .fullName(request.fullName())
+                .username(request.username())
+                .passwordHash(passwordEncoder.encode(request.password()))
+                .role(request.role())
+                .active(true)
+                .build();
+        return UserResponse.from(userRepository.save(user));
     }
 }

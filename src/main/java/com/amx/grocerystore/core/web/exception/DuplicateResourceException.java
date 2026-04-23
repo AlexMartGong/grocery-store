@@ -19,4 +19,9 @@ public class DuplicateResourceException extends RuntimeException {
     public static DuplicateResourceException username(String username) {
         return new DuplicateResourceException("username_taken", "Username already in use: " + username);
     }
+
+    public static DuplicateResourceException storeOwner(java.util.UUID storeId) {
+        return new DuplicateResourceException("store_owner_exists",
+                "Store already has an active owner: " + storeId);
+    }
 }
