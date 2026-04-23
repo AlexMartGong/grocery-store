@@ -1,0 +1,27 @@
+package com.amx.grocerystore.core.web.exception;
+
+import com.amx.grocerystore.users.domain.UserRole;
+import lombok.Getter;
+
+import java.util.UUID;
+
+@Getter
+public class InvalidResourceStateException extends RuntimeException {
+
+    private final String code;
+
+    public InvalidResourceStateException(String code, String message) {
+        super(message);
+        this.code = code;
+    }
+
+    public static InvalidResourceStateException storeNotActive(UUID storeId) {
+        return new InvalidResourceStateException("store_not_active",
+                "Store is not active: " + storeId);
+    }
+
+    public static InvalidResourceStateException roleNotAllowedForProvisioning(UserRole role) {
+        return new InvalidResourceStateException("role_not_allowed",
+                "Role not allowed for store provisioning: " + role);
+    }
+}

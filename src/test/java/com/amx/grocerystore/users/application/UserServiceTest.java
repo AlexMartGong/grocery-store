@@ -4,7 +4,11 @@ import com.amx.grocerystore.core.security.TenantAuthenticationToken;
 import com.amx.grocerystore.core.security.UserPrincipal;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.stores.domain.Store;
+import com.amx.grocerystore.stores.domain.StoreStatus;
+import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import com.amx.grocerystore.users.domain.User;
 import com.amx.grocerystore.users.domain.UserRole;
 import com.amx.grocerystore.users.infrastructure.UserRepository;
@@ -45,6 +49,9 @@ class UserServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private StoreRepository storeRepository;
 
     @Mock
     private PasswordEncoder passwordEncoder;
@@ -251,5 +258,142 @@ class UserServiceTest {
 
         verify(userRepository).findByIdAndStoreId(id, TENANT_ID);
         assertThat(other.getStoreId()).isEqualTo(OTHER_TENANT);
+    }
+
+    private Store store(UUID id, StoreStatus status) {
+        return Store.builder()
+                .id(id)
+                .code("store-" + id.toString().substring(0, 8))
+                .name("Store")
+                .status(status)
+                .build();
+    }
+
+    @Test
+    void provision_happyPath_hashesPasswordAndSavesWithPathStoreId() {
+        SecurityContextHolder.clearContext();
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño Uno", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.ACTIVE)));
+        given(userRepository.existsByStoreIdAndRoleAndActiveTrue(targetStore, UserRole.OWNER)).willReturn(false);
+        given(userRepository.existsByStoreIdAndUsername(targetStore, "owner1")).willReturn(false);
+        given(passwordEncoder.encode("Secret12")).willReturn("ENCODED");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(UUID.randomUUID());
+            return u;
+        });
+
+        UserResponse response = userService.provisionUserForStore(targetStore, req);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        User saved = captor.getValue();
+        assertThat(saved.getStoreId()).isEqualTo(targetStore);
+        assertThat(saved.getRole()).isEqualTo(UserRole.OWNER);
+        assertThat(saved.getPasswordHash()).isEqualTo("ENCODED");
+        assertThat(saved.isActive()).isTrue();
+        assertThat(response.username()).isEqualTo("owner1");
+    }
+
+    @Test
+    void provision_storeMissing_throwsNotFound() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(NotFoundException.class)
+                .extracting("code").isEqualTo("store_not_found");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_storeSuspended_throwsInvalidState() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.SUSPENDED)));
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(InvalidResourceStateException.class)
+                .extracting("code").isEqualTo("store_not_active");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_storeCanceled_throwsInvalidState() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.CANCELED)));
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(InvalidResourceStateException.class)
+                .extracting("code").isEqualTo("store_not_active");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_nonOwnerRole_throwsInvalidState() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Cajero", "cashier1", "Secret12", UserRole.CASHIER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.ACTIVE)));
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(InvalidResourceStateException.class)
+                .extracting("code").isEqualTo("role_not_allowed");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_duplicateUsernameInStore_throwsDuplicate() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.ACTIVE)));
+        given(userRepository.existsByStoreIdAndRoleAndActiveTrue(targetStore, UserRole.OWNER)).willReturn(false);
+        given(userRepository.existsByStoreIdAndUsername(targetStore, "owner1")).willReturn(true);
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(DuplicateResourceException.class)
+                .extracting("code").isEqualTo("username_taken");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_ownerAlreadyExists_throwsDuplicate() {
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.ACTIVE)));
+        given(userRepository.existsByStoreIdAndRoleAndActiveTrue(targetStore, UserRole.OWNER)).willReturn(true);
+
+        assertThatThrownBy(() -> userService.provisionUserForStore(targetStore, req))
+                .isInstanceOf(DuplicateResourceException.class)
+                .extracting("code").isEqualTo("store_owner_exists");
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void provision_doesNotUseSecurityContext() {
+        SecurityContextHolder.clearContext();
+        UUID targetStore = UUID.randomUUID();
+        CreateUserRequest req = new CreateUserRequest("Dueño", "owner1", "Secret12", UserRole.OWNER);
+        given(storeRepository.findById(targetStore)).willReturn(Optional.of(store(targetStore, StoreStatus.ACTIVE)));
+        given(userRepository.existsByStoreIdAndRoleAndActiveTrue(targetStore, UserRole.OWNER)).willReturn(false);
+        given(userRepository.existsByStoreIdAndUsername(targetStore, "owner1")).willReturn(false);
+        given(passwordEncoder.encode(any())).willReturn("H");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(UUID.randomUUID());
+            return u;
+        });
+
+        UserResponse response = userService.provisionUserForStore(targetStore, req);
+
+        assertThat(response.username()).isEqualTo("owner1");
     }
 }
