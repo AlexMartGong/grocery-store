@@ -1,6 +1,10 @@
 package com.amx.grocerystore.core.web;
 
 import com.amx.grocerystore.core.web.dto.ErrorResponse;
+import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
+import com.amx.grocerystore.core.web.exception.NotFoundException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -51,5 +55,29 @@ public class GlobalExceptionHandler {
                 .forEach(fe -> fields.put(fe.getField(), fe.getDefaultMessage()));
         return ResponseEntity.badRequest()
                 .body(ErrorResponse.validation(fields));
+    }
+
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(NotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(DuplicateResourceException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicate(DuplicateResourceException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(InvalidResourceStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidState(InvalidResourceStateException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleIntegrity(DataIntegrityViolationException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("conflict"));
     }
 }
