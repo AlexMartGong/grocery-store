@@ -1,5 +1,6 @@
 package com.amx.grocerystore.core.web.exception;
 
+import com.amx.grocerystore.inventory.domain.InventoryReason;
 import com.amx.grocerystore.users.domain.UserRole;
 import lombok.Getter;
 
@@ -23,5 +24,10 @@ public class InvalidResourceStateException extends RuntimeException {
     public static InvalidResourceStateException roleNotAllowedForProvisioning(UserRole role) {
         return new InvalidResourceStateException("role_not_allowed",
                 "Role not allowed for store provisioning: " + role);
+    }
+
+    public static InvalidResourceStateException reasonNotAllowed(InventoryReason reason) {
+        return new InvalidResourceStateException("reason_not_allowed",
+                "Inventory reason " + reason + " is managed by the system and cannot be set manually");
     }
 }

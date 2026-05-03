@@ -8,7 +8,7 @@ import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
-import com.amx.grocerystore.products.web.dto.UpdateProductPriceRequest;
+import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -96,11 +96,16 @@ public class ProductService {
     }
 
     @Transactional
-    public ProductResponse updatePrice(UUID id, UpdateProductPriceRequest request) {
+    public ProductResponse updatePrices(UUID id, UpdateProductPricesRequest request) {
         UUID storeId = SecurityUtils.currentStoreId();
         Product product = productRepository.findByIdAndStoreIdAndActiveTrue(id, storeId)
                 .orElseThrow(() -> NotFoundException.product(id));
-        product.setSalePrice(request.salePrice());
+        if (request.salePrice() != null) {
+            product.setSalePrice(request.salePrice());
+        }
+        if (request.purchaseCost() != null) {
+            product.setPurchaseCost(request.purchaseCost());
+        }
         return ProductResponse.from(productRepository.save(product));
     }
 
