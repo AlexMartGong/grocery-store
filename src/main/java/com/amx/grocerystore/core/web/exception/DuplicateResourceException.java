@@ -24,4 +24,9 @@ public class DuplicateResourceException extends RuntimeException {
         return new DuplicateResourceException("store_owner_exists",
                 "Store already has an active owner: " + storeId);
     }
+
+    public static DuplicateResourceException barcode(String barcode) {
+        return new DuplicateResourceException("product_barcode_taken",
+                "Barcode already in use: " + barcode);
+    }
 }
