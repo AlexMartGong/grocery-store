@@ -13,6 +13,8 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
 
     Optional<Product> findByIdAndStoreId(UUID id, UUID storeId);
 
+    Optional<Product> findByIdAndStoreIdAndActiveTrue(UUID id, UUID storeId);
+
     Page<Product> findByStoreId(UUID storeId, Pageable pageable);
 
     Page<Product> findByStoreIdAndActiveTrue(UUID storeId, Pageable pageable);

@@ -77,8 +77,8 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `AccessDeniedException`           | 403    | `forbidden`                                                                           |
 | `AuthenticationException` (rest)  | 401    | `unauthenticated`                                                                     |
 | `MethodArgumentNotValidException` | 400    | `validation_failed` + `fields`                                                        |
-| `NotFoundException`               | 404    | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`)                        |
-| `DuplicateResourceException`      | 409    | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`) |
+| `NotFoundException`               | 404    | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)                        |
+| `DuplicateResourceException`      | 409    | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)     |
 | `InvalidResourceStateException`   | 409    | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`)                     |
 | `DataIntegrityViolationException` | 409    | `conflict`                                                                            |
 | Filter-layer (via entry point)    | 401    | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`               |
@@ -90,10 +90,17 @@ Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-
 CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (paginated, optional filters),
 `PUT /{id}`, `DELETE /{id}` (soft delete via status flag — never physical removal). Authorization is scoped per actor:
 
-| Resource | Base path        | Role required | Tenant scoping                                  | Soft-delete behavior                                |
-|----------|------------------|---------------|-------------------------------------------------|-----------------------------------------------------|
-| Stores   | `/api/v1/stores` | `SUPER_ADMIN` | None — global                                   | `status = CANCELED`; idempotent if already canceled |
-| Users    | `/api/v1/users`  | `OWNER`       | `SecurityUtils.currentStoreId()` on every query | `active = false`; idempotent if already inactive    |
+| Resource | Base path           | Role required        | Tenant scoping                                  | Soft-delete behavior                                |
+|----------|---------------------|----------------------|-------------------------------------------------|-----------------------------------------------------|
+| Stores   | `/api/v1/stores`    | `SUPER_ADMIN`        | None — global                                   | `status = CANCELED`; idempotent if already canceled |
+| Users    | `/api/v1/users`     | `OWNER`              | `SecurityUtils.currentStoreId()` on every query | `active = false`; idempotent if already inactive    |
+| Products | `/api/v1/products`  | `OWNER` (write), `OWNER`/`CASHIER` (read) | `SecurityUtils.currentStoreId()` on every query | `active = false`; idempotent if already inactive    |
+
+**Products extra endpoint:** `GET /api/v1/products/search?barcode={barcode}` — lookup active product by barcode within the current store's tenant scope. Returns `product_not_found` if missing or inactive.
+
+**Products list filter:** `active` param — omitted or `true` → only active products (`findByStoreIdAndActiveTrue`); `false` → all products (`findByStoreId`).
+
+**`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`, column `unit_of_measure VARCHAR(10)`.
 
 **Admin provisioning:** `POST /api/v1/admin/stores/{storeId}/users` (`AdminUserProvisioningController`) — `SUPER_ADMIN`
 only. Bootstraps the initial `OWNER` for a store. Calls `UserService.provisionUserForStore(storeId, request)`, which
@@ -111,7 +118,9 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 
 **Domain exceptions:** `core.web.exception.NotFoundException` (404), `DuplicateResourceException` (409), and
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
-`DuplicateResourceException.username(name)`, `InvalidResourceStateException.storeNotActive(id)`). Add new factories
+`NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`,
+`DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
+`InvalidResourceStateException.storeNotActive(id)`). Add new factories
 here rather than instantiating with raw strings. Use `InvalidResourceStateException` for precondition failures on
 existing resources (wrong status, disallowed role, etc.) — distinct from `DuplicateResourceException` (uniqueness
 conflicts) and `NotFoundException` (missing).
