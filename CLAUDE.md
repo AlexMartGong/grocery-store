@@ -34,26 +34,26 @@ rather than by technical layer.
 
 One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 
-| Module          | Entities                                          |
-|-----------------|---------------------------------------------------|
-| `admin`         | `AdminUser`                                       |
-| `stores`        | `Store`                                           |
-| `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` |
-| `users`         | `User`                                            |
-| `products`      | `Product`                                         |
-| `customers`     | `Customer`, `CustomerPayment`                     |
-| `sales`         | `Sale`, `SaleItem`, `SaleCancellation`            |
-| `inventory`     | `InventoryMovement`                               |
-| `notifications` | `Notification`                                    |
+|Module|Entities|
+|-|-|
+|`admin`|`AdminUser`|
+|`stores`|`Store`|
+|`subscriptions`|`SubscriptionPlan`,`Subscription`,`SaasPayment`|
+|`users`|`User`|
+|`products`|`Product`|
+|`customers`|`Customer`,`CustomerPayment`|
+|`sales`|`Sale`, `SaleItem`, `SaleCancellation`|
+|`inventory`|`InventoryMovement`|
+|`notifications`|`Notification`|
 
 ### Auth Architecture
 
 Two separate auth flows share the same JWT secret and filter:
 
-| Actor       | Endpoint                   | Token claims                                    | Spring principal                              |
-|-------------|----------------------------|-------------------------------------------------|-----------------------------------------------|
-| Store users | `POST /api/v1/auth/login`  | `storeId`, `userId`, `role` (`OWNER`/`CASHIER`) | `UserPrincipal` → `TenantAuthenticationToken` |
-| SaaS admins | `POST /api/v1/admin/login` | `adminId`, `role` (`SUPER_ADMIN`)               | `AdminPrincipal` → `AdminAuthenticationToken` |
+|Actor|Endpoint|Token claims|Spring principal|
+|-|-|-|-|
+|Store users|`POST /api/v1/auth/login`|`storeId`,`userId`,`role`(`OWNER`/`CASHIER`)|`UserPrincipal`→`TenantAuthenticationToken`|
+|SaaS admins|`POST /api/v1/admin/login`|`adminId`,`role`(`SUPER_ADMIN`)|`AdminPrincipal`→`AdminAuthenticationToken`|
 
 `JwtAuthenticationFilter` distinguishes by presence of `adminId` claim. Never add `storeId` to admin tokens.
 
@@ -70,18 +70,18 @@ advices).
 Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). Factories: `ErrorResponse.of(code)`,
 `ErrorResponse.validation(fields)`.
 
-| Exception                         | Status | `error` code                                                                          |
-|-----------------------------------|--------|---------------------------------------------------------------------------------------|
-| `BadCredentialsException`         | 401    | `invalid_credentials`                                                                 |
-| `DisabledException`               | 403    | message (e.g. `store_inactive`)                                                       |
-| `AccessDeniedException`           | 403    | `forbidden`                                                                           |
-| `AuthenticationException` (rest)  | 401    | `unauthenticated`                                                                     |
-| `MethodArgumentNotValidException` | 400    | `validation_failed` + `fields`                                                        |
-| `NotFoundException`               | 404    | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`)                        |
-| `DuplicateResourceException`      | 409    | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`) |
-| `InvalidResourceStateException`   | 409    | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`)                     |
-| `DataIntegrityViolationException` | 409    | `conflict`                                                                            |
-| Filter-layer (via entry point)    | 401    | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`               |
+|Exception|Status|`error`code|
+|-|-|-|
+| `BadCredentialsException`|401|`invalid_credentials`|
+| `DisabledException`|403|message (e.g. `store_inactive`)|
+| `AccessDeniedException`|403|`forbidden`|
+| `AuthenticationException` (rest)|401|`unauthenticated`|
+| `MethodArgumentNotValidException`|400|`validation_failed` + `fields`|
+| `NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)|
+| `DuplicateResourceException`|409|from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
+| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`)|
+| `DataIntegrityViolationException`|409|`conflict`|
+| Filter-layer (via entry point)|401|`invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
 
 Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-users.sql`.
 
@@ -90,10 +90,35 @@ Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-
 CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (paginated, optional filters),
 `PUT /{id}`, `DELETE /{id}` (soft delete via status flag — never physical removal). Authorization is scoped per actor:
 
-| Resource | Base path        | Role required | Tenant scoping                                  | Soft-delete behavior                                |
-|----------|------------------|---------------|-------------------------------------------------|-----------------------------------------------------|
-| Stores   | `/api/v1/stores` | `SUPER_ADMIN` | None — global                                   | `status = CANCELED`; idempotent if already canceled |
-| Users    | `/api/v1/users`  | `OWNER`       | `SecurityUtils.currentStoreId()` on every query | `active = false`; idempotent if already inactive    |
+|Resource|Base path|Role required|Tenant scoping|Soft-delete behavior|
+|-|-|-|-|-|
+|Stores|`/api/v1/stores`|`SUPER_ADMIN`|None — global| `status = CANCELED`; idempotent if already canceled|
+|Users| `/api/v1/users`| `OWNER`|`SecurityUtils.currentStoreId()`on every query|`active = false`; idempotent if already inactive|
+|Products|`/api/v1/products`|`OWNER`(write),`OWNER`/`CASHIER` (read)|`SecurityUtils.currentStoreId()` on every query|`active = false`;idempotent if already inactive|
+
+**Products extra endpoint:** `GET /api/v1/products/search?barcode={barcode}` — lookup active product by barcode within
+the current store's tenant scope. Returns `product_not_found` if missing or inactive.
+
+**Products quick-update endpoint:** `PATCH /api/v1/products/{id}/price` (`OWNER`) — partial price update via
+`UpdateProductPricesRequest`. Both `sale_price` and `purchase_cost` are optional (`@PositiveOrZero`); only non-null
+fields are written. No-op if both null. Product must be active; returns `product_not_found` if not.
+
+**Products list filter:** `active` param — omitted or `true` → only active products; `false` → all products. Backed by
+`ProductRepository.findProducts(storeId, active, search, pageable)` (`@Query`); service maps `active=false` →
+`null` (predicate dropped), otherwise `TRUE`.
+
+**Server-side search (stores, products):** `GET /api/v1/stores` and `GET /api/v1/products` accept optional
+`search` `@RequestParam`. Case-insensitive `LIKE %search%` over `name`/`code` (stores) and `name`/`barcode`
+(products). Single `@Query` per repo combines all filters using `(:status IS NULL OR ...)` /
+`(:active IS NULL OR ...)` for typed enums/booleans, and `(:search = '' OR ...)` for the text term — the empty-string
+sentinel avoids PostgreSQL's `function lower(bytea) does not exist` error caused by JDBC binding `null` without
+type metadata. **Service contract:** convert `search == null` → `""` before calling the repo; never pass raw `null`.
+Repos: `StoreRepository.findStores(status, search, pageable)` (status as `String`, service passes
+`statusFilter.name()`), `ProductRepository.findProducts(storeId, active, search, pageable)`. `users` module is
+intentionally excluded (low-volume).
+
+**`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`,
+column `unit_of_measure VARCHAR(10)`.
 
 **Admin provisioning:** `POST /api/v1/admin/stores/{storeId}/users` (`AdminUserProvisioningController`) — `SUPER_ADMIN`
 only. Bootstraps the initial `OWNER` for a store. Calls `UserService.provisionUserForStore(storeId, request)`, which
@@ -111,10 +136,21 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 
 **Domain exceptions:** `core.web.exception.NotFoundException` (404), `DuplicateResourceException` (409), and
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
-`DuplicateResourceException.username(name)`, `InvalidResourceStateException.storeNotActive(id)`). Add new factories
+`NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`,
+`DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
+`InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`). Add new
+factories
 here rather than instantiating with raw strings. Use `InvalidResourceStateException` for precondition failures on
-existing resources (wrong status, disallowed role, etc.) — distinct from `DuplicateResourceException` (uniqueness
+existing resources (wrong status, disallowed role, disallowed inventory reason, etc.) — distinct from
+`DuplicateResourceException` (uniqueness
 conflicts) and `NotFoundException` (missing).
+
+**Inventory movement endpoint:** `POST /api/v1/inventory/movements` (`OWNER`/`CASHIER`) — manual stock adjustment via
+`AdjustStockRequest` (`productId`, `quantity` signed BigDecimal, `reason`, optional `notes`). Returns 201 with no body.
+`quantity` is a signed ledger delta: positive = stock in, negative = stock out. Rejects `SALE` and `CANCELLATION`
+reasons (`reason_not_allowed` 409) — those are owned by DB triggers `fn_apply_sale_item` / `fn_cancel_sale`. Allowed
+reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative is rejected by DB CHECK → 409
+`conflict`. `InventoryReason` enum colocated in `inventory.domain`.
 
 ### FK Strategy (bounded-context friendly)
 

@@ -2,6 +2,8 @@ package com.amx.grocerystore.products.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -52,6 +54,7 @@ public class Product {
     @Column(nullable = false, length = 150)
     private String name;
 
+    @DecimalMin("0.00")
     @Column(name = "purchase_cost", precision = 10, scale = 2)
     private BigDecimal purchaseCost;
 
@@ -61,12 +64,19 @@ public class Product {
     private BigDecimal salePrice;
 
     @NotNull
+    @DecimalMin("0.00")
     @Column(name = "current_stock", nullable = false, precision = 10, scale = 2)
     private BigDecimal currentStock;
 
     @NotNull
+    @DecimalMin("0.00")
     @Column(name = "minimum_stock", nullable = false, precision = 10, scale = 2)
     private BigDecimal minimumStock;
+
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "unit_of_measure", nullable = false, length = 10)
+    private UnitOfMeasure unitOfMeasure;
 
     @Column(nullable = false)
     private boolean active;

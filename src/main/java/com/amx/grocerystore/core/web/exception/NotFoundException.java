@@ -21,4 +21,12 @@ public class NotFoundException extends RuntimeException {
     public static NotFoundException user(UUID id) {
         return new NotFoundException("user_not_found", "User not found: " + id);
     }
+
+    public static NotFoundException product(UUID id) {
+        return new NotFoundException("product_not_found", "Product not found: " + id);
+    }
+
+    public static NotFoundException productByBarcode(String barcode) {
+        return new NotFoundException("product_not_found", "Product not found for barcode: " + barcode);
+    }
 }

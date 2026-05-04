@@ -47,10 +47,10 @@ public class StoreService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<StoreResponse> list(StoreStatus statusFilter, Pageable pageable) {
-        Page<Store> page = (statusFilter == null)
-                ? storeRepository.findAll(pageable)
-                : storeRepository.findByStatus(statusFilter, pageable);
+    public PageResponse<StoreResponse> list(StoreStatus statusFilter, String search, Pageable pageable) {
+        String status = (statusFilter == null) ? null : statusFilter.name();
+        String searchTerm = (search == null) ? "" : search;
+        Page<Store> page = storeRepository.findStores(status, searchTerm, pageable);
         return PageResponse.from(page.map(StoreResponse::from));
     }
 
