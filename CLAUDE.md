@@ -35,7 +35,7 @@ rather than by technical layer.
 One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 
 |Module|Entities|
-|----------|--------------------------------------|
+|-|-|
 |`admin`|`AdminUser`|
 |`stores`|`Store`|
 |`subscriptions`|`SubscriptionPlan`,`Subscription`,`SaasPayment`|
@@ -51,7 +51,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 Two separate auth flows share the same JWT secret and filter:
 
 |Actor|Endpoint|Token claims|Spring principal|
-|-----------|-------------------------|-----------------------------------------|-------------------------------------------|
+|-|-|-|-|
 |Store users|`POST /api/v1/auth/login`|`storeId`,`userId`,`role`(`OWNER`/`CASHIER`)|`UserPrincipal`→`TenantAuthenticationToken`|
 |SaaS admins|`POST /api/v1/admin/login`|`adminId`,`role`(`SUPER_ADMIN`)|`AdminPrincipal`→`AdminAuthenticationToken`|
 
@@ -70,18 +70,18 @@ advices).
 Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). Factories: `ErrorResponse.of(code)`,
 `ErrorResponse.validation(fields)`.
 
-| Exception                         | Status | `error` code|
-|-----------------------------------|--------|--------------------------------------------------------------------------------------------------------|
-| `BadCredentialsException`         | 401    | `invalid_credentials`|
-| `DisabledException`               | 403    | message (e.g. `store_inactive`)|
-| `AccessDeniedException`           | 403    | `forbidden`|
-| `AuthenticationException` (rest)  | 401    | `unauthenticated`|
-| `MethodArgumentNotValidException` | 400    | `validation_failed` + `fields`|
-| `NotFoundException`               | 404    | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)|
-| `DuplicateResourceException`      | 409    | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
-| `InvalidResourceStateException`   | 409    | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`)|
-| `DataIntegrityViolationException` | 409    | `conflict`|
-| Filter-layer (via entry point)    | 401    | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
+|Exception|Status|`error`code|
+|-|-|-|
+| `BadCredentialsException`|401|`invalid_credentials`|
+| `DisabledException`|403|message (e.g. `store_inactive`)|
+| `AccessDeniedException`|403|`forbidden`|
+| `AuthenticationException` (rest)|401|`unauthenticated`|
+| `MethodArgumentNotValidException`|400|`validation_failed` + `fields`|
+| `NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)|
+| `DuplicateResourceException`|409|from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
+| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`)|
+| `DataIntegrityViolationException`|409|`conflict`|
+| Filter-layer (via entry point)|401|`invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
 
 Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-users.sql`.
 
@@ -90,8 +90,8 @@ Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-
 CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (paginated, optional filters),
 `PUT /{id}`, `DELETE /{id}` (soft delete via status flag — never physical removal). Authorization is scoped per actor:
 
-|Resource|Base path|Role required|Tenant scoping| Soft-delete behavior                            |
-|--------|----------------|---------------------------------------|----------------------------------------------|-------------------------------------------------|
+|Resource|Base path|Role required|Tenant scoping|Soft-delete behavior|
+|-|-|-|-|-|
 |Stores|`/api/v1/stores`|`SUPER_ADMIN`|None — global| `status = CANCELED`; idempotent if already canceled|
 |Users| `/api/v1/users`| `OWNER`|`SecurityUtils.currentStoreId()`on every query|`active = false`; idempotent if already inactive|
 |Products|`/api/v1/products`|`OWNER`(write),`OWNER`/`CASHIER` (read)|`SecurityUtils.currentStoreId()` on every query|`active = false`;idempotent if already inactive|
