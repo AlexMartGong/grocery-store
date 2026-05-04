@@ -52,8 +52,9 @@ public class ProductController {
     @PreAuthorize("hasAnyRole('OWNER','CASHIER')")
     public ResponseEntity<PageResponse<ProductResponse>> list(
             @RequestParam(required = false) Boolean active,
+            @RequestParam(required = false) String search,
             Pageable pageable) {
-        return ResponseEntity.ok(productService.list(active, pageable));
+        return ResponseEntity.ok(productService.list(active, search, pageable));
     }
 
     @PutMapping("/{id}")

@@ -53,14 +53,11 @@ public class ProductService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<ProductResponse> list(Boolean active, Pageable pageable) {
+    public PageResponse<ProductResponse> list(Boolean active, String search, Pageable pageable) {
         UUID storeId = SecurityUtils.currentStoreId();
-        Page<Product> page;
-        if (active == null || active) {
-            page = productRepository.findByStoreIdAndActiveTrue(storeId, pageable);
-        } else {
-            page = productRepository.findByStoreId(storeId, pageable);
-        }
+        Boolean activeFilter = (active == null || active) ? Boolean.TRUE : null;
+        String searchTerm = (search == null) ? "" : search;
+        Page<Product> page = productRepository.findProducts(storeId, activeFilter, searchTerm, pageable);
         return PageResponse.from(page.map(ProductResponse::from));
     }
 

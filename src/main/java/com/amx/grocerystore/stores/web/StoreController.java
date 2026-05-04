@@ -47,8 +47,9 @@ public class StoreController {
     @GetMapping
     public ResponseEntity<PageResponse<StoreResponse>> list(
             @RequestParam(required = false) StoreStatus status,
+            @RequestParam(required = false) String search,
             Pageable pageable) {
-        return ResponseEntity.ok(storeService.list(status, pageable));
+        return ResponseEntity.ok(storeService.list(status, search, pageable));
     }
 
     @PutMapping("/{id}")

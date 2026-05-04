@@ -103,8 +103,19 @@ the current store's tenant scope. Returns `product_not_found` if missing or inac
 `UpdateProductPricesRequest`. Both `sale_price` and `purchase_cost` are optional (`@PositiveOrZero`); only non-null
 fields are written. No-op if both null. Product must be active; returns `product_not_found` if not.
 
-**Products list filter:** `active` param — omitted or `true` → only active products (`findByStoreIdAndActiveTrue`);
-`false` → all products (`findByStoreId`).
+**Products list filter:** `active` param — omitted or `true` → only active products; `false` → all products. Backed by
+`ProductRepository.findProducts(storeId, active, search, pageable)` (`@Query`); service maps `active=false` →
+`null` (predicate dropped), otherwise `TRUE`.
+
+**Server-side search (stores, products):** `GET /api/v1/stores` and `GET /api/v1/products` accept optional
+`search` `@RequestParam`. Case-insensitive `LIKE %search%` over `name`/`code` (stores) and `name`/`barcode`
+(products). Single `@Query` per repo combines all filters using `(:status IS NULL OR ...)` /
+`(:active IS NULL OR ...)` for typed enums/booleans, and `(:search = '' OR ...)` for the text term — the empty-string
+sentinel avoids PostgreSQL's `function lower(bytea) does not exist` error caused by JDBC binding `null` without
+type metadata. **Service contract:** convert `search == null` → `""` before calling the repo; never pass raw `null`.
+Repos: `StoreRepository.findStores(status, search, pageable)` (status as `String`, service passes
+`statusFilter.name()`), `ProductRepository.findProducts(storeId, active, search, pageable)`. `users` module is
+intentionally excluded (low-volume).
 
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`,
 column `unit_of_measure VARCHAR(10)`.
