@@ -95,6 +95,7 @@ CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `G
 |Stores|`/api/v1/stores`|`SUPER_ADMIN`|None — global| `status = CANCELED`; idempotent if already canceled|
 |Users| `/api/v1/users`| `OWNER`|`SecurityUtils.currentStoreId()`on every query|`active = false`; idempotent if already inactive|
 |Products|`/api/v1/products`|`OWNER`(write),`OWNER`/`CASHIER` (read)|`SecurityUtils.currentStoreId()` on every query|`active = false`;idempotent if already inactive|
+|Customers|`/api/v1/customers`|`OWNER`/`CASHIER` (read+write)|`SecurityUtils.currentStoreId()` on every query|`active = false`; idempotent if already inactive|
 
 **Products extra endpoint:** `GET /api/v1/products/search?barcode={barcode}` — lookup active product by barcode within
 the current store's tenant scope. Returns `product_not_found` if missing or inactive.
@@ -107,15 +108,17 @@ fields are written. No-op if both null. Product must be active; returns `product
 `ProductRepository.findProducts(storeId, active, search, pageable)` (`@Query`); service maps `active=false` →
 `null` (predicate dropped), otherwise `TRUE`.
 
-**Server-side search (stores, products):** `GET /api/v1/stores` and `GET /api/v1/products` accept optional
-`search` `@RequestParam`. Case-insensitive `LIKE %search%` over `name`/`code` (stores) and `name`/`barcode`
-(products). Single `@Query` per repo combines all filters using `(:status IS NULL OR ...)` /
-`(:active IS NULL OR ...)` for typed enums/booleans, and `(:search = '' OR ...)` for the text term — the empty-string
-sentinel avoids PostgreSQL's `function lower(bytea) does not exist` error caused by JDBC binding `null` without
-type metadata. **Service contract:** convert `search == null` → `""` before calling the repo; never pass raw `null`.
-Repos: `StoreRepository.findStores(status, search, pageable)` (status as `String`, service passes
-`statusFilter.name()`), `ProductRepository.findProducts(storeId, active, search, pageable)`. `users` module is
-intentionally excluded (low-volume).
+**Server-side search (stores, products, customers):** `GET /api/v1/stores`, `GET /api/v1/products`, and
+`GET /api/v1/customers` accept optional `search` `@RequestParam`. Case-insensitive `LIKE %search%` over `name`/`code`
+(stores), `name`/`barcode` (products), and `fullName`/`phone` (customers). Single `@Query` per repo combines all
+filters using `(:status IS NULL OR ...)` / `(:active IS NULL OR ...)` for typed enums/booleans, and
+`(:search = '' OR ...)` for the text term — the empty-string sentinel avoids PostgreSQL's
+`function lower(bytea) does not exist` error caused by JDBC binding `null` without type metadata. **Service contract:**
+convert `search == null` → `""` before calling the repo; never pass raw `null`. Repos:
+`StoreRepository.findStores(status, search, pageable)` (status as `String`, service passes `statusFilter.name()`),
+`ProductRepository.findProducts(storeId, active, search, pageable)`,
+`CustomerRepository.findCustomers(storeId, active, search, pageable)`. `users` module is intentionally excluded
+(low-volume).
 
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`,
 column `unit_of_measure VARCHAR(10)`.
@@ -136,7 +139,7 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 
 **Domain exceptions:** `core.web.exception.NotFoundException` (404), `DuplicateResourceException` (409), and
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
-`NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`,
+`NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`, `NotFoundException.customer(id)`,
 `DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
 `InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`). Add new
 factories
@@ -144,6 +147,15 @@ here rather than instantiating with raw strings. Use `InvalidResourceStateExcept
 existing resources (wrong status, disallowed role, disallowed inventory reason, etc.) — distinct from
 `DuplicateResourceException` (uniqueness
 conflicts) and `NotFoundException` (missing).
+
+**Customer balance encapsulation:** `Customer.outstandingBalance` is an accounting ledger column owned by DB triggers
+`fn_register_credit` (credit-sale → adds) and `fn_apply_payment` (payment → subtracts). Never expose it on write DTOs.
+`CreateCustomerRequest` / `UpdateCustomerRequest` carry only `fullName`, `phone`, `creditLimit`. `CustomerService.create`
+forces `outstandingBalance = ZERO` and `active = true` server-side; `update` maps only the three editable fields.
+`CustomerResponse` exposes the balance read-only for UI. `creditLimit` is freely editable (business policy), distinct
+from the balance which is trigger-only. Same `findCustomers` `@Query` shape as `findProducts` (`active` + `search`
+sentinels). `Customer ↔ CustomerPayment` colocated in `customers.domain`; `CustomerPayment.customer` is the only
+intra-aggregate `@ManyToOne` (cross-module FKs stay as plain UUIDs per FK Strategy).
 
 **Inventory movement endpoint:** `POST /api/v1/inventory/movements` (`OWNER`/`CASHIER`) — manual stock adjustment via
 `AdjustStockRequest` (`productId`, `quantity` signed BigDecimal, `reason`, optional `notes`). Returns 201 with no body.
