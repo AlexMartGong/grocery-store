@@ -79,7 +79,7 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `MethodArgumentNotValidException`|400|`validation_failed` + `fields`|
 | `NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)|
 | `DuplicateResourceException`|409|from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
-| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`)|
+| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`)|
 | `DataIntegrityViolationException`|409|`conflict`|
 | Filter-layer (via entry point)|401|`invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
 
@@ -141,12 +141,12 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
 `NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`, `NotFoundException.customer(id)`,
 `DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
-`InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`). Add new
-factories
-here rather than instantiating with raw strings. Use `InvalidResourceStateException` for precondition failures on
-existing resources (wrong status, disallowed role, disallowed inventory reason, etc.) — distinct from
-`DuplicateResourceException` (uniqueness
-conflicts) and `NotFoundException` (missing).
+`InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`,
+`InvalidResourceStateException.customerRequiredForCredit()`, `InvalidResourceStateException.creditLimitExceeded()`,
+`InvalidResourceStateException.invalidMixedPayment()`). Add new factories here rather than instantiating with raw
+strings. Use `InvalidResourceStateException` for precondition failures on existing resources (wrong status,
+disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
+`DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing).
 
 **Customer balance encapsulation:** `Customer.outstandingBalance` is an accounting ledger column owned by DB triggers
 `fn_register_credit` (credit-sale → adds) and `fn_apply_payment` (payment → subtracts). Never expose it on write DTOs.
@@ -163,6 +163,19 @@ intra-aggregate `@ManyToOne` (cross-module FKs stay as plain UUIDs per FK Strate
 reasons (`reason_not_allowed` 409) — those are owned by DB triggers `fn_apply_sale_item` / `fn_cancel_sale`. Allowed
 reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative is rejected by DB CHECK → 409
 `conflict`. `InventoryReason` enum colocated in `inventory.domain`.
+
+**Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
+(`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +
+`SaleResponse`. `total = Σ(quantity × unitPrice)` rounded `HALF_UP` to scale 2. Payment-method rules:
+- `CASH` / `CARD` / `TRANSFER`: `amountPaid = total`, `amountCredited = 0`. No customer required.
+- `CREDIT`: `customer_id` required (`customer_required`); enforces `outstandingBalance + total ≤ creditLimit`
+  (`credit_limit_exceeded`). `amountPaid = 0`, `amountCredited = total`.
+- `MIXED`: `customer_id` required; `amount_paid` must satisfy `0 < amount_paid < total` strict
+  (`invalid_mixed_payment`); `amountCredited = total − amountPaid`; credit limit validated against
+  **`amountCredited` only**, not `total`.
+DB owns the ledger: trigger `fn_register_credit` adds `amount_credited` to `customers.outstanding_balance` AFTER
+INSERT when `amount_credited > 0 AND customer_id IS NOT NULL`; `fn_apply_sale_item` decrements stock per line. Service
+never mutates balance directly. `GET /api/v1/sales` paginated, scoped to `currentStoreId()`.
 
 ### FK Strategy (bounded-context friendly)
 
