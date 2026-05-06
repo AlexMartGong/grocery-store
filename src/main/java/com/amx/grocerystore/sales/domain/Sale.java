@@ -73,7 +73,7 @@ public class Sale {
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    @OneToMany(mappedBy = "sale", cascade = CascadeType.PERSIST, orphanRemoval = false)
+    @OneToMany(mappedBy = "sale", cascade = CascadeType.PERSIST)
     @Builder.Default
     private List<SaleItem> items = new ArrayList<>();
 }
