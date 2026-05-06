@@ -41,7 +41,6 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class SaleServiceTest {
@@ -78,6 +77,7 @@ class SaleServiceTest {
 
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.CASH,
+                null,
                 null,
                 List.of(
                         new SaleItemRequest(PRODUCT_ID, new BigDecimal("2"), new BigDecimal("25.50")),
@@ -126,6 +126,7 @@ class SaleServiceTest {
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.CREDIT,
                 CUSTOMER_ID,
+                null,
                 List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("3"), new BigDecimal("20.00")))
         );
 
@@ -145,7 +146,7 @@ class SaleServiceTest {
         assertThat(saved.getAmountPaid()).isEqualByComparingTo("0.00");
         assertThat(saved.getAmountCredited()).isEqualByComparingTo("60.00");
         assertThat(saved.getItems()).hasSize(1);
-        SaleItem item = saved.getItems().get(0);
+        SaleItem item = saved.getItems().getFirst();
         assertThat(item.getSale()).isSameAs(saved);
         assertThat(item.getProductId()).isEqualTo(PRODUCT_ID);
         assertThat(item.getQuantity()).isEqualByComparingTo("3");
@@ -162,6 +163,7 @@ class SaleServiceTest {
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.CREDIT,
                 CUSTOMER_ID,
+                null,
                 List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("2"), new BigDecimal("30.55")))
         );
 
@@ -183,6 +185,7 @@ class SaleServiceTest {
 
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.CREDIT,
+                null,
                 null,
                 List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1"), new BigDecimal("10.00")))
         );
@@ -207,6 +210,7 @@ class SaleServiceTest {
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.CASH,
                 null,
+                null,
                 List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1"), new BigDecimal("10.00")))
         );
 
@@ -223,11 +227,52 @@ class SaleServiceTest {
     }
 
     @Test
-    void createSale_MixedPayment_ThrowsException() {
+    void createSale_MixedPayment_Success() {
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
+                .willReturn(Optional.of(activeProduct(PRODUCT_ID)));
+        given(customerRepository.findByIdAndStoreId(CUSTOMER_ID, STORE_ID))
+                .willReturn(Optional.of(customer(new BigDecimal("0.00"), new BigDecimal("500.00"))));
+        given(saleRepository.save(any(Sale.class))).willAnswer(inv -> {
+            Sale s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.MIXED,
                 CUSTOMER_ID,
-                List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1"), new BigDecimal("10.00")))
+                new BigDecimal("150.00"),
+                List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1"), new BigDecimal("159.50")))
+        );
+
+        try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
+            mocked.when(SecurityUtils::currentStoreId).thenReturn(STORE_ID);
+            mocked.when(SecurityUtils::currentUserId).thenReturn(CASHIER_ID);
+            saleService.createSale(request);
+        }
+
+        ArgumentCaptor<Sale> captor = ArgumentCaptor.forClass(Sale.class);
+        verify(saleRepository).save(captor.capture());
+        Sale saved = captor.getValue();
+
+        assertThat(saved.getCustomerId()).isEqualTo(CUSTOMER_ID);
+        assertThat(saved.getPaymentMethod()).isEqualTo(SalePaymentMethod.MIXED);
+        assertThat(saved.getTotalAmount()).isEqualByComparingTo("159.50");
+        assertThat(saved.getAmountPaid()).isEqualByComparingTo("150.00");
+        assertThat(saved.getAmountCredited()).isEqualByComparingTo("9.50");
+        assertThat(saved.getItems()).hasSize(1);
+    }
+
+    @Test
+    void createSale_MixedPayment_AmountPaidGteTotal_ThrowsException() {
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
+                .willReturn(Optional.of(activeProduct(PRODUCT_ID)));
+
+        CreateSaleRequest request = new CreateSaleRequest(
+                SalePaymentMethod.MIXED,
+                CUSTOMER_ID,
+                new BigDecimal("100.00"),
+                List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1"), new BigDecimal("100.00")))
         );
 
         try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
@@ -235,10 +280,11 @@ class SaleServiceTest {
             mocked.when(SecurityUtils::currentUserId).thenReturn(CASHIER_ID);
             assertThatThrownBy(() -> saleService.createSale(request))
                     .isInstanceOf(InvalidResourceStateException.class)
-                    .hasFieldOrPropertyWithValue("code", "payment_method_not_supported");
+                    .hasFieldOrPropertyWithValue("code", "invalid_mixed_payment");
         }
 
-        verifyNoInteractions(productRepository, customerRepository, saleRepository);
+        verify(customerRepository, never()).findByIdAndStoreId(any(), any());
+        verify(saleRepository, never()).save(any());
     }
 
     @Test

@@ -189,20 +189,22 @@ class SaleControllerTest {
 
     @Test
     @WithMockUser(roles = "CASHIER")
-    void post_mixedPayment_returns409() throws Exception {
+    void post_mixedPayment_invalidSplit_returns409() throws Exception {
         given(saleService.createSale(any()))
-                .willThrow(InvalidResourceStateException.paymentMethodNotSupported(SalePaymentMethod.MIXED));
+                .willThrow(InvalidResourceStateException.invalidMixedPayment());
 
         mvc.perform(post(URL).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
                                   "payment_method":"MIXED",
-                                  "items":[{"product_id":"%s","quantity":1,"unit_price":10.00}]
+                                  "customer_id":"%s",
+                                  "amount_paid":100.00,
+                                  "items":[{"product_id":"%s","quantity":1,"unit_price":100.00}]
                                 }
-                                """.formatted(UUID.randomUUID())))
+                                """.formatted(UUID.randomUUID(), UUID.randomUUID())))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value("payment_method_not_supported"));
+                .andExpect(jsonPath("$.error").value("invalid_mixed_payment"));
     }
 
     @Test
