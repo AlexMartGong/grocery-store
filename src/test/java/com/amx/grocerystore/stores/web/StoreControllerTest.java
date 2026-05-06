@@ -161,7 +161,7 @@ class StoreControllerTest {
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
     void list_paginated_returns200() throws Exception {
-        given(storeService.list(eq(null), any(Pageable.class)))
+        given(storeService.list(eq(null), any(), any(Pageable.class)))
                 .willReturn(new PageResponse<>(List.of(sampleResponse(UUID.randomUUID())), 0, 20, 1L, 1));
 
         mvc.perform(get(URL))
@@ -173,7 +173,7 @@ class StoreControllerTest {
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
     void list_withStatusFilter_returns200() throws Exception {
-        given(storeService.list(eq(StoreStatus.CANCELED), any(Pageable.class)))
+        given(storeService.list(eq(StoreStatus.CANCELED), any(), any(Pageable.class)))
                 .willReturn(new PageResponse<>(List.of(), 0, 20, 0L, 0));
 
         mvc.perform(get(URL).param("status", "CANCELED"))

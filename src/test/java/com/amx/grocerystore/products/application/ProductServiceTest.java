@@ -157,41 +157,49 @@ class ProductServiceTest {
     }
 
     @Test
-    void list_defaultActiveNull_callsFindByStoreIdAndActiveTrue_excludesInactive() {
+    void list_defaultActiveNull_callsFindProducts_withActiveTrue_excludesInactive() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Product> page = new PageImpl<>(List.of(product(UUID.randomUUID(), true)));
-        given(productRepository.findByStoreIdAndActiveTrue(TENANT_ID, pageable)).willReturn(page);
+        given(productRepository.findProducts(TENANT_ID, Boolean.TRUE, "", pageable)).willReturn(page);
 
-        PageResponse<ProductResponse> response = productService.list(null, pageable);
+        PageResponse<ProductResponse> response = productService.list(null, null, pageable);
 
-        verify(productRepository).findByStoreIdAndActiveTrue(TENANT_ID, pageable);
-        verify(productRepository, never()).findByStoreId(any(), any());
+        verify(productRepository).findProducts(TENANT_ID, Boolean.TRUE, "", pageable);
         assertThat(response.content()).hasSize(1);
         assertThat(response.content().getFirst().active()).isTrue();
     }
 
     @Test
-    void list_activeTrue_callsFindByStoreIdAndActiveTrue() {
+    void list_activeTrue_callsFindProducts_withActiveTrue() {
         Pageable pageable = PageRequest.of(0, 10);
-        given(productRepository.findByStoreIdAndActiveTrue(TENANT_ID, pageable))
+        given(productRepository.findProducts(TENANT_ID, Boolean.TRUE, "", pageable))
                 .willReturn(new PageImpl<>(List.of()));
 
-        productService.list(true, pageable);
+        productService.list(true, null, pageable);
 
-        verify(productRepository).findByStoreIdAndActiveTrue(TENANT_ID, pageable);
-        verify(productRepository, never()).findByStoreId(any(), any());
+        verify(productRepository).findProducts(TENANT_ID, Boolean.TRUE, "", pageable);
     }
 
     @Test
-    void list_activeFalse_callsFindByStoreId_includesAll() {
+    void list_activeFalse_callsFindProducts_withNullActive_includesAll() {
         Pageable pageable = PageRequest.of(0, 10);
-        given(productRepository.findByStoreId(TENANT_ID, pageable))
+        given(productRepository.findProducts(TENANT_ID, null, "", pageable))
                 .willReturn(new PageImpl<>(List.of()));
 
-        productService.list(false, pageable);
+        productService.list(false, null, pageable);
 
-        verify(productRepository).findByStoreId(TENANT_ID, pageable);
-        verify(productRepository, never()).findByStoreIdAndActiveTrue(any(), any());
+        verify(productRepository).findProducts(TENANT_ID, null, "", pageable);
+    }
+
+    @Test
+    void list_withSearch_passesTermVerbatim() {
+        Pageable pageable = PageRequest.of(0, 10);
+        given(productRepository.findProducts(TENANT_ID, Boolean.TRUE, "leche", pageable))
+                .willReturn(new PageImpl<>(List.of()));
+
+        productService.list(null, "leche", pageable);
+
+        verify(productRepository).findProducts(TENANT_ID, Boolean.TRUE, "leche", pageable);
     }
 
     @Test

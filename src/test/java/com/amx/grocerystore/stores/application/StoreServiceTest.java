@@ -91,29 +91,37 @@ class StoreServiceTest {
     }
 
     @Test
-    void list_noFilter_delegatesFindAll() {
+    void list_noFilter_delegatesFindStores_withNullStatus_andEmptySearch() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Store> page = new PageImpl<>(List.of(store(UUID.randomUUID(), "x", StoreStatus.ACTIVE)));
-        given(storeRepository.findAll(pageable)).willReturn(page);
+        given(storeRepository.findStores(null, "", pageable)).willReturn(page);
 
-        PageResponse<StoreResponse> response = storeService.list(null, pageable);
+        PageResponse<StoreResponse> response = storeService.list(null, null, pageable);
 
         assertThat(response.content()).hasSize(1);
-        verify(storeRepository).findAll(pageable);
-        verify(storeRepository, never()).findByStatus(any(), any());
+        verify(storeRepository).findStores(null, "", pageable);
     }
 
     @Test
-    void list_withStatus_delegatesFindByStatus() {
+    void list_withStatus_delegatesFindStores_withStatusName() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Store> page = new PageImpl<>(List.of(store(UUID.randomUUID(), "x", StoreStatus.SUSPENDED)));
-        given(storeRepository.findByStatus(StoreStatus.SUSPENDED, pageable)).willReturn(page);
+        given(storeRepository.findStores("SUSPENDED", "", pageable)).willReturn(page);
 
-        PageResponse<StoreResponse> response = storeService.list(StoreStatus.SUSPENDED, pageable);
+        PageResponse<StoreResponse> response = storeService.list(StoreStatus.SUSPENDED, null, pageable);
 
         assertThat(response.content()).hasSize(1);
-        verify(storeRepository).findByStatus(StoreStatus.SUSPENDED, pageable);
-        verify(storeRepository, never()).findAll(any(Pageable.class));
+        verify(storeRepository).findStores("SUSPENDED", "", pageable);
+    }
+
+    @Test
+    void list_withSearch_passesTermVerbatim() {
+        Pageable pageable = PageRequest.of(0, 10);
+        given(storeRepository.findStores(null, "demo", pageable)).willReturn(new PageImpl<>(List.of()));
+
+        storeService.list(null, "demo", pageable);
+
+        verify(storeRepository).findStores(null, "demo", pageable);
     }
 
     @Test
