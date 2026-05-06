@@ -39,10 +39,6 @@ public class SaleService {
         UUID cashierId = SecurityUtils.currentUserId();
         SalePaymentMethod method = request.paymentMethod();
 
-        if (method == SalePaymentMethod.MIXED) {
-            throw InvalidResourceStateException.paymentMethodNotSupported(method);
-        }
-
         for (SaleItemRequest item : request.items()) {
             productRepository.findByIdAndStoreIdAndActiveTrue(item.productId(), storeId)
                     .orElseThrow(() -> NotFoundException.product(item.productId()));
@@ -57,20 +53,42 @@ public class SaleService {
         BigDecimal amountCredited;
         UUID customerId = request.customerId();
 
-        if (method == SalePaymentMethod.CREDIT) {
-            if (customerId == null) {
-                throw InvalidResourceStateException.customerRequiredForCredit();
+        switch (method) {
+            case CASH, CARD, TRANSFER -> {
+                amountPaid = total;
+                amountCredited = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
             }
-            Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
-                    .orElseThrow(() -> NotFoundException.customer(customerId));
-            if (customer.getOutstandingBalance().add(total).compareTo(customer.getCreditLimit()) > 0) {
-                throw InvalidResourceStateException.creditLimitExceeded();
+            case CREDIT -> {
+                if (customerId == null) {
+                    throw InvalidResourceStateException.customerRequiredForCredit();
+                }
+                Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
+                        .orElseThrow(() -> NotFoundException.customer(customerId));
+                if (customer.getOutstandingBalance().add(total).compareTo(customer.getCreditLimit()) > 0) {
+                    throw InvalidResourceStateException.creditLimitExceeded();
+                }
+                amountPaid = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+                amountCredited = total;
             }
-            amountPaid = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
-            amountCredited = total;
-        } else {
-            amountPaid = total;
-            amountCredited = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+            case MIXED -> {
+                if (customerId == null) {
+                    throw InvalidResourceStateException.customerRequiredForCredit();
+                }
+                BigDecimal requested = request.amountPaid();
+                if (requested == null
+                        || requested.compareTo(BigDecimal.ZERO) <= 0
+                        || requested.compareTo(total) >= 0) {
+                    throw InvalidResourceStateException.invalidMixedPayment();
+                }
+                amountPaid = requested.setScale(2, RoundingMode.HALF_UP);
+                amountCredited = total.subtract(amountPaid);
+                Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
+                        .orElseThrow(() -> NotFoundException.customer(customerId));
+                if (customer.getOutstandingBalance().add(amountCredited).compareTo(customer.getCreditLimit()) > 0) {
+                    throw InvalidResourceStateException.creditLimitExceeded();
+                }
+            }
+            default -> throw new IllegalStateException("Unhandled payment method: " + method);
         }
 
         Sale sale = Sale.builder()
