@@ -45,4 +45,14 @@ public class InvalidResourceStateException extends RuntimeException {
         return new InvalidResourceStateException("customer_required",
                 "Customer is required for credit sales.");
     }
+
+    public static InvalidResourceStateException shiftAlreadyOpen() {
+        return new InvalidResourceStateException("shift_already_open",
+                "An open cash register shift already exists for this store.");
+    }
+
+    public static InvalidResourceStateException shiftNotOpen() {
+        return new InvalidResourceStateException("shift_not_open",
+                "No open cash register shift for this store.");
+    }
 }

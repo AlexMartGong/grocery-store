@@ -33,4 +33,8 @@ public class NotFoundException extends RuntimeException {
     public static NotFoundException customer(UUID id) {
         return new NotFoundException("customer_not_found", "Customer not found: " + id);
     }
+
+    public static NotFoundException openShift() {
+        return new NotFoundException("open_shift_not_found", "No open cash register shift for current store.");
+    }
 }
