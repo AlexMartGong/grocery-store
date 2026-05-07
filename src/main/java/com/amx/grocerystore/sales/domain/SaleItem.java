@@ -46,7 +46,7 @@ public class SaleItem {
 
     @NotNull
     @DecimalMin(value = "0.01")
-    @Column(nullable = false, precision = 10, scale = 2)
+    @Column(nullable = false, precision = 10, scale = 3)
     private BigDecimal quantity;
 
     @NotNull

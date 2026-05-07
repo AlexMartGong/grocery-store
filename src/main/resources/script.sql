@@ -169,7 +169,7 @@ CREATE TABLE sale_items
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     sale_id    UUID           NOT NULL REFERENCES sales (id) ON DELETE RESTRICT,
     product_id UUID           NOT NULL REFERENCES products (id) ON DELETE RESTRICT,
-    quantity   NUMERIC(10, 2) NOT NULL CHECK (quantity > 0),
+    quantity   NUMERIC(10, 3) NOT NULL CHECK (quantity > 0),
     unit_price NUMERIC(10, 2) NOT NULL -- historical snapshot
 );
 
@@ -459,7 +459,7 @@ SELECT store_id, id AS product_id, name, current_stock, minimum_stock
 FROM products
 WHERE active
   AND current_stock <= minimum_stock
-ORDER BY current_stock ASC;
+ORDER BY current_stock;
 
 -- Customers with outstanding debt
 CREATE OR REPLACE VIEW v_customers_with_debt AS
@@ -548,10 +548,9 @@ VALUES ('00000000-0000-0000-0000-000000000001',
         'Inventory, credit tracking and notifications from your phone');
 
 -- Demo store
-INSERT INTO stores (id, name, owner_name, whatsapp, address)
-VALUES ('11111111-1111-1111-1111-111111111111',
-        'Abarrotes Doña Lupe', 'Guadalupe Ramírez',
-        '3741112222', 'Calle Hidalgo 45, Tequila');
+INSERT INTO stores (id, code, name, owner_name, whatsapp, address)
+VALUES ('11111111-1111-1111-1111-111111111111', 'DEMO', 'Abarrotes Doña Lupe',
+        'Guadalupe Ramírez', '3741112222', 'Calle Hidalgo 45, Tequila');
 
 -- Active subscription for the demo store
 INSERT INTO subscriptions (store_id, plan_id, next_billing_date)
