@@ -173,6 +173,25 @@ CREATE TABLE sale_items
     unit_price NUMERIC(10, 2) NOT NULL -- historical snapshot
 );
 
+CREATE TABLE cash_register_shifts
+(
+    id               UUID PRIMARY KEY        DEFAULT gen_random_uuid(),
+    store_id         UUID           NOT NULL REFERENCES stores (id),
+    user_id          UUID           NOT NULL REFERENCES users (id),
+    status           VARCHAR(20)    NOT NULL DEFAULT 'OPEN'
+        CHECK (status IN ('OPEN', 'CLOSED')),
+
+    opened_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    closed_at        TIMESTAMPTZ,
+
+    opening_balance  NUMERIC(10, 2) NOT NULL,
+    expected_balance NUMERIC(10, 2),
+    real_balance     NUMERIC(10, 2),
+    difference       NUMERIC(10, 2),
+
+    notes            TEXT
+);
+
 -- Customer payments (partial or full repayment of their debt)
 CREATE TABLE customer_payments
 (
