@@ -37,4 +37,8 @@ public class NotFoundException extends RuntimeException {
     public static NotFoundException openShift() {
         return new NotFoundException("open_shift_not_found", "No open cash register shift for current store.");
     }
+
+    public static NotFoundException notification(UUID id) {
+        return new NotFoundException("notification_not_found", "Notification not found: " + id);
+    }
 }
