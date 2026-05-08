@@ -310,8 +310,8 @@ BEGIN
         INSERT INTO notifications (store_id, type, title, message, reference_id)
         VALUES (v_store_id,
                 CASE WHEN v_stock_after <= 0 THEN 'OUT_OF_STOCK' ELSE 'LOW_STOCK' END,
-                'Running low: ' || v_product_name,
-                GREATEST(v_stock_after, 0) || ' left (minimum ' || v_min_stock || ')',
+                CASE WHEN v_stock_after <= 0 THEN 'Agotado: ' ELSE 'Poco inventario: ' END || v_product_name,
+                'Quedan ' || GREATEST(v_stock_after, 0) || ' (mínimo ' || v_min_stock || ')',
                 NEW.product_id);
     END IF;
 
