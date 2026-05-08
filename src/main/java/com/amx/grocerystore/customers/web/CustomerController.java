@@ -3,11 +3,14 @@ package com.amx.grocerystore.customers.web;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.customers.application.CustomerService;
 import com.amx.grocerystore.customers.web.dto.CreateCustomerRequest;
+import com.amx.grocerystore.customers.web.dto.CreatePaymentRequest;
+import com.amx.grocerystore.customers.web.dto.CustomerPaymentResponse;
 import com.amx.grocerystore.customers.web.dto.CustomerResponse;
 import com.amx.grocerystore.customers.web.dto.UpdateCustomerRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -61,5 +64,14 @@ public class CustomerController {
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         customerService.softDelete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/payments")
+    @PreAuthorize("hasAnyRole('OWNER','CASHIER')")
+    public ResponseEntity<CustomerPaymentResponse> registerPayment(
+            @PathVariable UUID id,
+            @Valid @RequestBody CreatePaymentRequest request) {
+        CustomerPaymentResponse response = customerService.registerPayment(id, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 }

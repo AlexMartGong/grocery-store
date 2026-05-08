@@ -4,11 +4,17 @@ import com.amx.grocerystore.core.security.SecurityUtils;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.domain.Customer;
+import com.amx.grocerystore.customers.domain.CustomerPayment;
+import com.amx.grocerystore.customers.domain.events.CustomerPaymentEvent;
+import com.amx.grocerystore.customers.infrastructure.CustomerPaymentRepository;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
 import com.amx.grocerystore.customers.web.dto.CreateCustomerRequest;
+import com.amx.grocerystore.customers.web.dto.CreatePaymentRequest;
+import com.amx.grocerystore.customers.web.dto.CustomerPaymentResponse;
 import com.amx.grocerystore.customers.web.dto.CustomerResponse;
 import com.amx.grocerystore.customers.web.dto.UpdateCustomerRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -22,6 +28,8 @@ import java.util.UUID;
 public class CustomerService {
 
     private final CustomerRepository customerRepository;
+    private final CustomerPaymentRepository customerPaymentRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public CustomerResponse create(CreateCustomerRequest request) {
@@ -62,6 +70,27 @@ public class CustomerService {
         customer.setPhone(request.phone());
         customer.setCreditLimit(request.creditLimit());
         return CustomerResponse.from(customerRepository.save(customer));
+    }
+
+    @Transactional
+    public CustomerPaymentResponse registerPayment(UUID customerId, CreatePaymentRequest request) {
+        UUID storeId = SecurityUtils.currentStoreId();
+        Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
+                .orElseThrow(() -> NotFoundException.customer(customerId));
+
+        CustomerPayment payment = CustomerPayment.builder()
+                .storeId(storeId)
+                .customer(customer)
+                .userId(SecurityUtils.currentUserId())
+                .amount(request.amount())
+                .build();
+        CustomerPayment saved = customerPaymentRepository.save(payment);
+
+        CustomerPaymentResponse response = CustomerPaymentResponse.from(saved);
+        eventPublisher.publishEvent(
+                new CustomerPaymentEvent(response, customer.getFullName(), customer.getPhone())
+        );
+        return response;
     }
 
     @Transactional

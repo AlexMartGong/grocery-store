@@ -23,7 +23,7 @@ public record AppCorsProperties(
                     "app.cors: allowCredentials=true is incompatible with wildcard origin");
         }
         allowedOrigins.forEach(o -> {
-            if (!o.startsWith("https://") && !o.startsWith("http://localhost") && !o.startsWith("http://192.168.1.")) {
+            if (!o.startsWith("https://") && !o.startsWith("http://localhost") && !o.startsWith("http://192.168.68.")) {
                 throw new IllegalStateException(
                         "app.cors.allowed-origins must use https:// (or http://localhost): " + o);
             }
