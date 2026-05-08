@@ -44,6 +44,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 |`customers`|`Customer`,`CustomerPayment`|
 |`sales`|`Sale`, `SaleItem`, `SaleCancellation`|
 |`inventory`|`InventoryMovement`|
+|`cash`|`CashRegisterShift`|
 |`notifications`|`Notification`|
 
 ### Auth Architecture
@@ -77,9 +78,9 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `AccessDeniedException`|403|`forbidden`|
 | `AuthenticationException` (rest)|401|`unauthenticated`|
 | `MethodArgumentNotValidException`|400|`validation_failed` + `fields`|
-| `NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`)|
+| `NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `open_shift_not_found`)|
 | `DuplicateResourceException`|409|from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
-| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`)|
+| `InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`)|
 | `DataIntegrityViolationException`|409|`conflict`|
 | Filter-layer (via entry point)|401|`invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
 
@@ -140,10 +141,12 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 **Domain exceptions:** `core.web.exception.NotFoundException` (404), `DuplicateResourceException` (409), and
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
 `NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`, `NotFoundException.customer(id)`,
+`NotFoundException.openShift()`,
 `DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
 `InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`,
 `InvalidResourceStateException.customerRequiredForCredit()`, `InvalidResourceStateException.creditLimitExceeded()`,
-`InvalidResourceStateException.invalidMixedPayment()`). Add new factories here rather than instantiating with raw
+`InvalidResourceStateException.invalidMixedPayment()`, `InvalidResourceStateException.shiftAlreadyOpen()`,
+`InvalidResourceStateException.shiftNotOpen()`). Add new factories here rather than instantiating with raw
 strings. Use `InvalidResourceStateException` for precondition failures on existing resources (wrong status,
 disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
 `DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing).
@@ -163,6 +166,19 @@ intra-aggregate `@ManyToOne` (cross-module FKs stay as plain UUIDs per FK Strate
 reasons (`reason_not_allowed` 409) — those are owned by DB triggers `fn_apply_sale_item` / `fn_cancel_sale`. Allowed
 reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative is rejected by DB CHECK → 409
 `conflict`. `InventoryReason` enum colocated in `inventory.domain`.
+
+**Cash register shift endpoints:** `POST /api/v1/cash/shifts/open` (`OWNER`/`CASHIER`) — opens a shift via
+`OpenShiftRequest` (`opening_balance` `@PositiveOrZero`). Returns 201 + `CashShiftResponse`. Fails with 409
+`shift_already_open` if a shift is already `OPEN` for the store.
+`GET /api/v1/cash/shifts/current` (`OWNER`/`CASHIER`) — returns the active `OPEN` shift or 404 `open_shift_not_found`.
+`POST /api/v1/cash/shifts/current/close` (`OWNER`/`CASHIER`) — closes the active shift via `CloseShiftRequest`
+(`real_balance` `@PositiveOrZero`, optional `notes`). Returns 200 + `CashShiftResponse` with computed fields:
+`expected_balance = opening_balance + cashSales + cashPayments` (time-windowed from `opened_at` to close time),
+`difference = real_balance − expected_balance`. `cashSales` = Σ `amount_paid` for `CASH`/`MIXED` `COMPLETED` sales;
+`cashPayments` = Σ `customer_payments.amount`. DB never mutated directly — calculated in service, persisted on shift.
+`GET /api/v1/cash/shifts` (`OWNER` only) — paginated audit history of all shifts for the store, ordered
+`opened_at DESC`. Wrapped in `PageResponse<CashShiftResponse>`.
+Cross-module: `SaleRepository.sumCashInflow(storeId, openedAt)` and new `CustomerPaymentRepository.sumPaymentsSince(storeId, openedAt)` provide the aggregation queries.
 
 **Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
 (`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +

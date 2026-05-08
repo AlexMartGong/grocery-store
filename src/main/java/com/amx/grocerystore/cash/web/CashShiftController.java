@@ -4,8 +4,10 @@ import com.amx.grocerystore.cash.application.CashShiftService;
 import com.amx.grocerystore.cash.web.dto.CashShiftResponse;
 import com.amx.grocerystore.cash.web.dto.CloseShiftRequest;
 import com.amx.grocerystore.cash.web.dto.OpenShiftRequest;
+import com.amx.grocerystore.core.web.dto.PageResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,8 +39,19 @@ public class CashShiftController {
         return ResponseEntity.ok(cashShiftService.getCurrentShift());
     }
 
+    @GetMapping("/current/preview")
+    public ResponseEntity<CashShiftResponse> preview() {
+        return ResponseEntity.ok(cashShiftService.previewCurrentShift());
+    }
+
     @PostMapping("/current/close")
     public ResponseEntity<CashShiftResponse> close(@Valid @RequestBody CloseShiftRequest request) {
         return ResponseEntity.ok(cashShiftService.closeShift(request));
+    }
+
+    @GetMapping
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<PageResponse<CashShiftResponse>> history(Pageable pageable) {
+        return ResponseEntity.ok(PageResponse.from(cashShiftService.getShiftsHistory(pageable)));
     }
 }

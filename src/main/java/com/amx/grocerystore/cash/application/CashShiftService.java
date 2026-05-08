@@ -12,6 +12,8 @@ import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.infrastructure.CustomerPaymentRepository;
 import com.amx.grocerystore.sales.infrastructure.SaleRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,26 +52,35 @@ public class CashShiftService {
 
     @Transactional(readOnly = true)
     public CashShiftResponse getCurrentShift() {
-        UUID storeId = SecurityUtils.currentStoreId();
-        return shiftRepository.findByStoreIdAndStatus(storeId, ShiftStatus.OPEN)
-                .map(CashShiftResponse::from)
-                .orElseThrow(NotFoundException::openShift);
+        return CashShiftResponse.from(loadOpenShift(SecurityUtils.currentStoreId()));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<CashShiftResponse> getShiftsHistory(Pageable pageable) {
+        return shiftRepository.findByStoreIdOrderByOpenedAtDesc(SecurityUtils.currentStoreId(), pageable)
+                .map(CashShiftResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public CashShiftResponse previewCurrentShift() {
+        CashRegisterShift shift = loadOpenShift(SecurityUtils.currentStoreId());
+        BigDecimal expected = computeExpectedBalance(shift);
+
+        return new CashShiftResponse(
+                shift.getId(), shift.getStoreId(), shift.getUserId(),
+                shift.getStatus(), shift.getOpenedAt(), shift.getClosedAt(),
+                shift.getOpeningBalance(),
+                expected,
+                null,
+                null,
+                shift.getNotes()
+        );
     }
 
     @Transactional
     public CashShiftResponse closeShift(CloseShiftRequest request) {
-        UUID storeId = SecurityUtils.currentStoreId();
-        CashRegisterShift shift = shiftRepository.findByStoreIdAndStatus(storeId, ShiftStatus.OPEN)
-                .orElseThrow(NotFoundException::openShift);
-
-        OffsetDateTime openedAt = shift.getOpenedAt();
-        BigDecimal cashSales = saleRepository.sumCashInflow(storeId, openedAt);
-        BigDecimal cashPayments = customerPaymentRepository.sumPaymentsSince(storeId, openedAt);
-
-        BigDecimal expected = shift.getOpeningBalance()
-                .add(cashSales)
-                .add(cashPayments)
-                .setScale(2, RoundingMode.HALF_UP);
+        CashRegisterShift shift = loadOpenShift(SecurityUtils.currentStoreId());
+        BigDecimal expected = computeExpectedBalance(shift);
         BigDecimal real = request.realBalance().setScale(2, RoundingMode.HALF_UP);
 
         shift.setExpectedBalance(expected);
@@ -80,5 +91,21 @@ public class CashShiftService {
         shift.setNotes(request.notes());
 
         return CashShiftResponse.from(shiftRepository.save(shift));
+    }
+
+    private CashRegisterShift loadOpenShift(UUID storeId) {
+        return shiftRepository.findByStoreIdAndStatus(storeId, ShiftStatus.OPEN)
+                .orElseThrow(NotFoundException::openShift);
+    }
+
+    private BigDecimal computeExpectedBalance(CashRegisterShift shift) {
+        UUID storeId = shift.getStoreId();
+        OffsetDateTime openedAt = shift.getOpenedAt();
+        BigDecimal cashSales = saleRepository.sumCashInflow(storeId, openedAt);
+        BigDecimal cashPayments = customerPaymentRepository.sumPaymentsSince(storeId, openedAt);
+        return shift.getOpeningBalance()
+                .add(cashSales)
+                .add(cashPayments)
+                .setScale(2, RoundingMode.HALF_UP);
     }
 }
