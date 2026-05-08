@@ -1,0 +1,25 @@
+package com.amx.grocerystore.notifications.application;
+
+import com.amx.grocerystore.cash.domain.events.ShiftClosedEvent;
+import com.amx.grocerystore.cash.web.dto.CashShiftResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+public class WhatsAppEventListener {
+
+    @Async
+    @EventListener
+    public void onShiftClosed(ShiftClosedEvent event) {
+        CashShiftResponse shift = event.shift();
+        log.info(
+                "Simulando envío a WhatsApp (Evolution API) al dueño: Corte de caja realizado. Esperado: ${}, Real: ${}, Diferencia: ${}",
+                shift.expectedBalance(),
+                shift.realBalance(),
+                shift.difference()
+        );
+    }
+}

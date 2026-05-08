@@ -2,6 +2,7 @@ package com.amx.grocerystore.cash.application;
 
 import com.amx.grocerystore.cash.domain.CashRegisterShift;
 import com.amx.grocerystore.cash.domain.ShiftStatus;
+import com.amx.grocerystore.cash.domain.events.ShiftClosedEvent;
 import com.amx.grocerystore.cash.infrastructure.CashRegisterShiftRepository;
 import com.amx.grocerystore.cash.web.dto.CashShiftResponse;
 import com.amx.grocerystore.cash.web.dto.CloseShiftRequest;
@@ -12,6 +13,7 @@ import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.infrastructure.CustomerPaymentRepository;
 import com.amx.grocerystore.sales.infrastructure.SaleRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,7 @@ public class CashShiftService {
     private final CashRegisterShiftRepository shiftRepository;
     private final SaleRepository saleRepository;
     private final CustomerPaymentRepository customerPaymentRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public CashShiftResponse openShift(OpenShiftRequest request) {
@@ -90,7 +93,9 @@ public class CashShiftService {
         shift.setClosedAt(OffsetDateTime.now());
         shift.setNotes(request.notes());
 
-        return CashShiftResponse.from(shiftRepository.save(shift));
+        CashShiftResponse response = CashShiftResponse.from(shiftRepository.save(shift));
+        eventPublisher.publishEvent(new ShiftClosedEvent(response));
+        return response;
     }
 
     private CashRegisterShift loadOpenShift(UUID storeId) {
