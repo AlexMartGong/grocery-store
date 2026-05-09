@@ -151,6 +151,13 @@ strings. Use `InvalidResourceStateException` for precondition failures on existi
 disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
 `DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing).
 
+**Customer payment endpoint:** `POST /api/v1/customers/{id}/payments` (`OWNER`/`CASHIER`) — register a credit
+repayment via `CreatePaymentRequest(amount @Positive)`. Returns 201 + `CustomerPaymentResponse`. DB trigger
+`fn_apply_payment` decrements `customers.outstanding_balance` AFTER INSERT; service never mutates the balance directly.
+After the JPA save returns, `CustomerService.registerPayment` publishes `CustomerPaymentEvent(payment, customerName,
+customerPhone)` via `ApplicationEventPublisher` so `WhatsAppEventListener.onCustomerPayment` can notify the customer
+asynchronously.
+
 **Customer balance encapsulation:** `Customer.outstandingBalance` is an accounting ledger column owned by DB triggers
 `fn_register_credit` (credit-sale → adds) and `fn_apply_payment` (payment → subtracts). Never expose it on write DTOs.
 `CreateCustomerRequest` / `UpdateCustomerRequest` carry only `fullName`, `phone`, `creditLimit`. `CustomerService.create`
@@ -192,6 +199,40 @@ Cross-module: `SaleRepository.sumCashInflow(storeId, openedAt)` and new `Custome
 DB owns the ledger: trigger `fn_register_credit` adds `amount_credited` to `customers.outstanding_balance` AFTER
 INSERT when `amount_credited > 0 AND customer_id IS NOT NULL`; `fn_apply_sale_item` decrements stock per line. Service
 never mutates balance directly. `GET /api/v1/sales` paginated, scoped to `currentStoreId()`.
+
+### Notifications & Async Events
+
+Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher`
+**after the persistence call returns** — listeners must treat the business outcome as final and never re-throw to the
+producer. Current publishers: `CashShiftService.close` → `ShiftClosedEvent(CashShiftResponse)`;
+`CustomerService.registerPayment` → `CustomerPaymentEvent(CustomerPaymentResponse, customerName, customerPhone)`.
+
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with a `ThreadPoolTaskExecutor`
+(core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are
+annotated `@Async` so event publication never blocks the request thread.
+
+**WhatsApp via Evolution API:**
+- `notifications.infrastructure.EvolutionWhatsAppClient` (`@Service`) wraps a Spring Boot 4 `RestClient` and POSTs to
+  `/message/sendText/{instance}` with `apikey` header and body `EvolutionMessageRequest(number, text)` (DTO under
+  `notifications.infrastructure.dto`).
+- The HTTP call is wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts are
+  swallowed by design so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has
+  already committed.
+- Phone normalization: strip spaces, then prefix `52` only when the input is exactly 10 digits (Mexican local → E.164).
+  `null` phone → log warn + return.
+- Configuration (`application.properties`):
+  `evolution.api.base-url`, `evolution.api.apikey`, `evolution.api.instance`, `store.owner.phone` — all overridable via
+  env vars (`EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`, `STORE_OWNER_PHONE`).
+
+**Current listeners (`WhatsAppEventListener`):**
+- `onShiftClosed(ShiftClosedEvent)` → message to `${store.owner.phone}` with expected/real/difference balances.
+- `onCustomerPayment(CustomerPaymentEvent)` → message to `event.customerPhone()` confirming the payment + new
+  outstanding balance (re-read from `CustomerRepository`, since the trigger `fn_apply_payment` updates it post-commit).
+
+When adding a new notification: define the event record under `<source-module>.domain.events`, publish from the
+service after the persistence call, add an `@Async @EventListener` method on `WhatsAppEventListener` (or a new
+listener), and route through `EvolutionWhatsAppClient.sendMessage(phone, text)`. Do **not** add new HTTP error
+handling at the listener layer — the client owns failure isolation.
 
 ### FK Strategy (bounded-context friendly)
 
