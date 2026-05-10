@@ -31,6 +31,7 @@ Each module contains `web`, `application`, `domain`, and `infrastructure` sub-pa
 | `customers` | `Customer`, `CustomerPayment` |
 | `sales` | `Sale`, `SaleItem`, `SaleCancellation` |
 | `inventory` | `InventoryMovement` |
+| `cash` | `CashRegisterShift` |
 | `notifications` | `Notification` |
 
 ### FK Strategy
@@ -65,12 +66,16 @@ CRUD endpoints share the same shape: `POST` (201 + `Location`), `GET /{id}`, `GE
 | Users | `/api/v1/users` | `OWNER` | Yes |
 | Products | `/api/v1/products` | `OWNER` (write), `OWNER`/`CASHIER` (read) | Yes |
 | Customers | `/api/v1/customers` | `OWNER`/`CASHIER` | Yes |
+| Sales | `/api/v1/sales` | `OWNER`/`CASHIER` | Yes |
 | Inventory movements | `/api/v1/inventory/movements` | `OWNER`/`CASHIER` | Yes |
+| Cash register shifts | `/api/v1/cash/shifts` | `OWNER`/`CASHIER` (open/close/current), `OWNER` (history) | Yes |
 
 Extras:
 
 - `GET /api/v1/products/search?barcode={barcode}` — barcode lookup, current store scope.
 - `PATCH /api/v1/products/{id}/price` — partial price update (`OWNER`).
+- `POST /api/v1/sales/{id}/cancel` — register a sale cancellation (`OWNER`/`CASHIER`); body `{reason, notes}`. DB trigger `fn_cancel_sale` flips status, returns stock, reverses credit. Idempotent (re-cancel → 409 `sale_already_canceled`).
+- `POST /api/v1/customers/{id}/payments` — credit repayment; DB trigger decrements `customers.outstanding_balance`.
 - `POST /api/v1/admin/stores/{storeId}/users` — bootstrap initial `OWNER` for a store (`SUPER_ADMIN`).
 - Server-side `search` param on `stores`, `products`, `customers` list endpoints (case-insensitive `LIKE`).
 
@@ -89,6 +94,20 @@ Single `@RestControllerAdvice`: `core.web.GlobalExceptionHandler`. Body: `ErrorR
 | `InvalidResourceStateException` | 409 | factory code (e.g. `store_not_active`) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
 
+## Notifications & Async Events
+
+Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher` **after** persistence. `WhatsAppEventListener` (in `notifications.application`) handles them with `@Async @EventListener`, executing on a `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`) configured in `core.config.AsyncConfig`. Listeners must never re-throw — `EvolutionWhatsAppClient.sendMessage` swallows HTTP failures by design (best-effort delivery).
+
+| Event | Published by | Routed to |
+|-|-|-|
+| `ShiftClosedEvent` | `CashShiftService.close` | `${store.owner.phone}` |
+| `CustomerPaymentEvent` | `CustomerService.registerPayment` | customer phone |
+| `LowStockEvent` | `SaleService` (parsed from pending notifications) | `${store.owner.phone}` |
+| `SaleCancelledEvent` | `SaleService.cancelSale` | `${store.owner.phone}` (anti-fraud alert) |
+| `InventoryLossEvent` | `InventoryService.adjustStock` (when `reason=LOSS`) | `${store.owner.phone}` (shrinkage alert) |
+
+WhatsApp delivery via Evolution API: `EvolutionWhatsAppClient` POSTs to `/message/sendText/{instance}`. Phone normalization: 10-digit input gets `52` prefix (Mexican local → E.164).
+
 ## Configuration
 
 DB connection via env vars (defaults to `localhost` dev values):
@@ -100,6 +119,22 @@ DB connection via env vars (defaults to `localhost` dev values):
 | `DB_NAME` | (see `application.properties`) |
 | `DB_USERNAME` | (see `application.properties`) |
 | `DB_PASSWORD` | (see `application.properties`) |
+
+JWT (boot fails if missing/invalid):
+
+| Var | Notes |
+|-|-|
+| `JWT_SECRET` | Base64-encoded; must decode to ≥32 bytes (HS256) |
+| `JWT_EXPIRATION_MINUTES` | Optional; default `480` |
+
+WhatsApp / Evolution API:
+
+| Var | Maps to |
+|-|-|
+| `EVOLUTION_BASE_URL` | `evolution.api.base-url` |
+| `EVOLUTION_APIKEY` | `evolution.api.apikey` |
+| `EVOLUTION_INSTANCE` | `evolution.api.instance` |
+| `STORE_OWNER_PHONE` | `store.owner.phone` |
 
 ## Build & Run
 

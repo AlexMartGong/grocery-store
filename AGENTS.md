@@ -82,9 +82,9 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `AccessDeniedException` | 403 | `forbidden` |
 | `AuthenticationException` (rest) | 401 | `unauthenticated` |
 | `MethodArgumentNotValidException` | 400 | `validation_failed` + `fields` |
-| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`) |
+| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`) |
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
-| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`) |
+| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
 | Filter-layer (via entry point) | 401 | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
 
@@ -144,12 +144,13 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 **Domain exceptions:** `core.web.exception.NotFoundException` (404), `DuplicateResourceException` (409), and
 `InvalidResourceStateException` (409) carry an `error` code via static factories (`NotFoundException.store(id)`,
 `NotFoundException.product(id)`, `NotFoundException.productByBarcode(barcode)`, `NotFoundException.customer(id)`,
-`NotFoundException.openShift()`,
+`NotFoundException.openShift()`, `NotFoundException.sale(id)`,
 `DuplicateResourceException.username(name)`, `DuplicateResourceException.barcode(barcode)`,
 `InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`,
 `InvalidResourceStateException.customerRequiredForCredit()`, `InvalidResourceStateException.creditLimitExceeded()`,
 `InvalidResourceStateException.invalidMixedPayment()`, `InvalidResourceStateException.shiftAlreadyOpen()`,
-`InvalidResourceStateException.shiftNotOpen()`). Add new factories here rather than instantiating with raw
+`InvalidResourceStateException.shiftNotOpen()`, `InvalidResourceStateException.saleAlreadyCanceled()`). Add new
+factories here rather than instantiating with raw
 strings. Use `InvalidResourceStateException` for precondition failures on existing resources (wrong status,
 disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
 `DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing).
@@ -175,7 +176,8 @@ intra-aggregate `@ManyToOne` (cross-module FKs stay as plain UUIDs per FK Strate
 `quantity` is a signed ledger delta: positive = stock in, negative = stock out. Rejects `SALE` and `CANCELLATION`
 reasons (`reason_not_allowed` 409) — those are owned by DB triggers `fn_apply_sale_item` / `fn_cancel_sale`. Allowed
 reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative is rejected by DB CHECK → 409
-`conflict`. `InventoryReason` enum colocated in `inventory.domain`.
+`conflict`. `InventoryReason` enum colocated in `inventory.domain`. After save, when `reason == LOSS`, publishes
+`InventoryLossEvent(productName, quantity, notes)` via `ApplicationEventPublisher` for the shrinkage alert.
 
 **Cash register shift endpoints:** `POST /api/v1/cash/shifts/open` (`OWNER`/`CASHIER`) — opens a shift via
 `OpenShiftRequest` (`opening_balance` `@PositiveOrZero`). Returns 201 + `CashShiftResponse`. Fails with 409
@@ -189,6 +191,16 @@ reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative
 `GET /api/v1/cash/shifts` (`OWNER` only) — paginated audit history of all shifts for the store, ordered
 `opened_at DESC`. Wrapped in `PageResponse<CashShiftResponse>`.
 Cross-module: `SaleRepository.sumCashInflow(storeId, openedAt)` and new `CustomerPaymentRepository.sumPaymentsSince(storeId, openedAt)` provide the aggregation queries.
+
+**Sale cancellation endpoint:** `POST /api/v1/sales/{id}/cancel` (`OWNER`/`CASHIER`) — `CancelSaleRequest`
+(`@NotNull reason: CancellationReason`, optional `notes`). Returns 204. Service inserts `SaleCancellation`; DB
+trigger `fn_cancel_sale` (script.sql) flips `sales.status` to `CANCELED`, returns each item's quantity to
+`products.current_stock`, logs `inventory_movements` rows with `reason=CANCELLATION`, and reverses
+`customers.outstanding_balance` if the original sale had `amount_credited > 0`. Service must NOT mutate
+`sale.status` directly. Idempotent: re-cancel returns 409 `sale_already_canceled`. Cross-store access returns
+`sale_not_found`. Repo additions: `SaleRepository.findByIdAndStoreId`, new `SaleCancellationRepository`.
+After save, publishes `SaleCancelledEvent(saleId, totalAmount, reason.name())` via `ApplicationEventPublisher`
+for the anti-fraud WhatsApp alert.
 
 **Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
 (`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +
@@ -207,8 +219,12 @@ never mutates balance directly. `GET /api/v1/sales` paginated, scoped to `curren
 
 Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher`
 **after the persistence call returns** — listeners must treat the business outcome as final and never re-throw to the
-producer. Current publishers: `CashShiftService.close` → `ShiftClosedEvent(CashShiftResponse)`;
-`CustomerService.registerPayment` → `CustomerPaymentEvent(CustomerPaymentResponse, customerName, customerPhone)`.
+producer. Current publishers:
+- `CashShiftService.close` → `ShiftClosedEvent(CashShiftResponse)`.
+- `CustomerService.registerPayment` → `CustomerPaymentEvent(CustomerPaymentResponse, customerName, customerPhone)`.
+- `SaleService.createSale` → `LowStockEvent(productName, remainingStock, minStock)` per pending low-stock notification, parsed from `notifications` rows after the sale persists.
+- `SaleService.cancelSale` → `SaleCancelledEvent(saleId, totalAmount, reason)`.
+- `InventoryService.adjustStock` → `InventoryLossEvent(productName, quantity, notes)` only when `reason == LOSS`.
 
 **Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with a `ThreadPoolTaskExecutor`
 (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are
@@ -231,6 +247,12 @@ annotated `@Async` so event publication never blocks the request thread.
 - `onShiftClosed(ShiftClosedEvent)` → message to `${store.owner.phone}` with expected/real/difference balances.
 - `onCustomerPayment(CustomerPaymentEvent)` → message to `event.customerPhone()` confirming the payment + new
   outstanding balance (re-read from `CustomerRepository`, since the trigger `fn_apply_payment` updates it post-commit).
+- `onLowStock(LowStockEvent)` → message to `${store.owner.phone}` warning about a product that's low or out of stock.
+- `onSaleCancelled(SaleCancelledEvent)` → message to `${store.owner.phone}` with anti-fraud alert (total amount,
+  reason, ticket id).
+- `onInventoryLoss(InventoryLossEvent)` → message to `${store.owner.phone}` with shrinkage alert. Uses
+  `event.quantity().abs()` for display because `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are
+  negative); the ledger keeps the sign, the WhatsApp message shows magnitude.
 
 When adding a new notification: define the event record under `<source-module>.domain.events`, publish from the
 service after the persistence call, add an `@Async @EventListener` method on `WhatsAppEventListener` (or a new
