@@ -6,6 +6,10 @@ import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
+import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
+import com.amx.grocerystore.notifications.domain.Notification;
+import com.amx.grocerystore.notifications.domain.NotificationType;
+import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.sales.domain.Sale;
 import com.amx.grocerystore.sales.domain.SaleItem;
@@ -16,6 +20,8 @@ import com.amx.grocerystore.sales.web.dto.CreateSaleRequest;
 import com.amx.grocerystore.sales.web.dto.SaleItemRequest;
 import com.amx.grocerystore.sales.web.dto.SaleResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -23,15 +29,27 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SaleService {
 
+    private static final Pattern STOCK_PATTERN =
+            Pattern.compile("Quedan\\s+(\\d+(?:\\.\\d+)?)\\s+\\(mínimo\\s+(\\d+(?:\\.\\d+)?)\\)");
+    private static final String LOW_PREFIX = "Poco inventario: ";
+    private static final String OUT_PREFIX = "Agotado: ";
+
     private final SaleRepository saleRepository;
     private final CustomerRepository customerRepository;
     private final ProductRepository productRepository;
+    private final NotificationRepository notificationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public SaleResponse createSale(CreateSaleRequest request) {
@@ -113,7 +131,9 @@ public class SaleService {
         }
 
         Sale saved = saleRepository.save(sale);
-        return SaleResponse.from(saved);
+        SaleResponse response = SaleResponse.from(saved);
+        publishLowStockEvents(storeId);
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -121,5 +141,41 @@ public class SaleService {
         UUID storeId = SecurityUtils.currentStoreId();
         Page<Sale> page = saleRepository.findByStoreId(storeId, pageable);
         return PageResponse.from(page.map(SaleResponse::from));
+    }
+
+    private void publishLowStockEvents(UUID storeId) {
+        List<Notification> pending = notificationRepository.findByStoreIdAndTypeInAndReadAtIsNull(
+                storeId, List.of(NotificationType.LOW_STOCK, NotificationType.OUT_OF_STOCK));
+        if (pending.isEmpty()) {
+            return;
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        for (Notification n : pending) {
+            LowStockEvent ev = parseLowStock(n);
+            if (ev != null) {
+                eventPublisher.publishEvent(ev);
+            }
+            n.setReadAt(now);
+        }
+        notificationRepository.saveAll(pending);
+    }
+
+    private LowStockEvent parseLowStock(Notification n) {
+        String title = n.getTitle();
+        String productName;
+        if (title.startsWith(LOW_PREFIX)) {
+            productName = title.substring(LOW_PREFIX.length());
+        } else if (title.startsWith(OUT_PREFIX)) {
+            productName = title.substring(OUT_PREFIX.length());
+        } else {
+            productName = title;
+        }
+        String message = n.getMessage() == null ? "" : n.getMessage();
+        Matcher m = STOCK_PATTERN.matcher(message);
+        if (!m.find()) {
+            log.warn("low-stock notification {} message not parseable: {}", n.getId(), message);
+            return null;
+        }
+        return new LowStockEvent(productName, new BigDecimal(m.group(1)), new BigDecimal(m.group(2)));
     }
 }

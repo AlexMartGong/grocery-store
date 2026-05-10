@@ -5,6 +5,7 @@ import com.amx.grocerystore.cash.web.dto.CashShiftResponse;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.domain.events.CustomerPaymentEvent;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
+import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
 import com.amx.grocerystore.notifications.infrastructure.EvolutionWhatsAppClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -58,5 +59,17 @@ public class WhatsAppEventListener {
                 newBalance
         );
         client.sendMessage(event.customerPhone(), text);
+    }
+
+    @Async
+    @EventListener
+    public void onLowStock(LowStockEvent event) {
+        String text = String.format(
+                "⚠️ Alerta de Inventario ⚠️%nEl producto *%s* se está agotando.%nQuedan: %s (Mínimo: %s)",
+                event.productName(),
+                event.remainingStock(),
+                event.minStock()
+        );
+        client.sendMessage(ownerPhone, text);
     }
 }
