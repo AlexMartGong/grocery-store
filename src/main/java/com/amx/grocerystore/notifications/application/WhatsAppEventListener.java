@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.math.BigDecimal;
 
@@ -49,7 +51,7 @@ public class WhatsAppEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCustomerPayment(CustomerPaymentEvent event) {
         BigDecimal newBalance = customerRepository.findById(event.payment().customerId())
                 .map(Customer::getOutstandingBalance)
@@ -80,9 +82,19 @@ public class WhatsAppEventListener {
     public void onSaleCancelled(SaleCancelledEvent event) {
         String text = "🚨 *ALERTA ANTI-FRAUDE* 🚨\n"
                 + "Se ha cancelado una venta por un total de *$" + event.totalAmount() + "*.\n"
-                + "Motivo: " + event.reason() + "\n"
+                + "Motivo: " + translateReason(event.reason()) + "\n"
                 + "Ticket ID: " + event.saleId();
         client.sendMessage(ownerPhone, text);
+    }
+
+    private String translateReason(String reason) {
+        return switch (reason) {
+            case "CASHIER_ERROR" -> "Error de cajero";
+            case "CUSTOMER_REGRET" -> "Arrepentimiento del cliente";
+            case "WRONG_PRODUCT" -> "Producto equivocado";
+            case "OTHER" -> "Otro motivo";
+            default -> reason;
+        };
     }
 
     @Async
