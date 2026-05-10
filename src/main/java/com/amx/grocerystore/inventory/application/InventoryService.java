@@ -5,11 +5,13 @@ import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.inventory.domain.InventoryMovement;
 import com.amx.grocerystore.inventory.domain.InventoryReason;
+import com.amx.grocerystore.inventory.domain.events.InventoryLossEvent;
 import com.amx.grocerystore.inventory.infrastructure.InventoryMovementRepository;
 import com.amx.grocerystore.inventory.web.dto.AdjustStockRequest;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +23,7 @@ public class InventoryService {
 
     private final InventoryMovementRepository inventoryMovementRepository;
     private final ProductRepository productRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public void adjustStock(AdjustStockRequest request) {
@@ -43,5 +46,10 @@ public class InventoryService {
 
         product.setCurrentStock(product.getCurrentStock().add(request.quantity()));
         productRepository.save(product);
+
+        if (request.reason() == InventoryReason.LOSS) {
+            eventPublisher.publishEvent(
+                    new InventoryLossEvent(product.getName(), request.quantity(), request.notes()));
+        }
     }
 }

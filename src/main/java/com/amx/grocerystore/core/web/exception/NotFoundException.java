@@ -41,4 +41,8 @@ public class NotFoundException extends RuntimeException {
     public static NotFoundException notification(UUID id) {
         return new NotFoundException("notification_not_found", "Notification not found: " + id);
     }
+
+    public static NotFoundException sale(UUID id) {
+        return new NotFoundException("sale_not_found", "Sale not found: " + id);
+    }
 }

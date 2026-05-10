@@ -55,4 +55,9 @@ public class InvalidResourceStateException extends RuntimeException {
         return new InvalidResourceStateException("shift_not_open",
                 "No open cash register shift for this store.");
     }
+
+    public static InvalidResourceStateException saleAlreadyCanceled() {
+        return new InvalidResourceStateException("sale_already_canceled",
+                "Sale is already canceled.");
+    }
 }

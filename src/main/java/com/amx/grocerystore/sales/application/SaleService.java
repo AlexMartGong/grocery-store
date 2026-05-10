@@ -12,10 +12,14 @@ import com.amx.grocerystore.notifications.domain.NotificationType;
 import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.sales.domain.Sale;
+import com.amx.grocerystore.sales.domain.SaleCancellation;
 import com.amx.grocerystore.sales.domain.SaleItem;
 import com.amx.grocerystore.sales.domain.SalePaymentMethod;
 import com.amx.grocerystore.sales.domain.SaleStatus;
+import com.amx.grocerystore.sales.domain.events.SaleCancelledEvent;
+import com.amx.grocerystore.sales.infrastructure.SaleCancellationRepository;
 import com.amx.grocerystore.sales.infrastructure.SaleRepository;
+import com.amx.grocerystore.sales.web.dto.CancelSaleRequest;
 import com.amx.grocerystore.sales.web.dto.CreateSaleRequest;
 import com.amx.grocerystore.sales.web.dto.SaleItemRequest;
 import com.amx.grocerystore.sales.web.dto.SaleResponse;
@@ -46,6 +50,7 @@ public class SaleService {
     private static final String OUT_PREFIX = "Agotado: ";
 
     private final SaleRepository saleRepository;
+    private final SaleCancellationRepository saleCancellationRepository;
     private final CustomerRepository customerRepository;
     private final ProductRepository productRepository;
     private final NotificationRepository notificationRepository;
@@ -134,6 +139,26 @@ public class SaleService {
         SaleResponse response = SaleResponse.from(saved);
         publishLowStockEvents(storeId);
         return response;
+    }
+
+    @Transactional
+    public void cancelSale(UUID saleId, CancelSaleRequest request) {
+        UUID storeId = SecurityUtils.currentStoreId();
+        UUID userId = SecurityUtils.currentUserId();
+        Sale sale = saleRepository.findByIdAndStoreId(saleId, storeId)
+                .orElseThrow(() -> NotFoundException.sale(saleId));
+        if (sale.getStatus() == SaleStatus.CANCELED) {
+            throw InvalidResourceStateException.saleAlreadyCanceled();
+        }
+        SaleCancellation cancellation = SaleCancellation.builder()
+                .sale(sale)
+                .canceledBy(userId)
+                .reason(request.reason())
+                .notes(request.notes())
+                .build();
+        saleCancellationRepository.save(cancellation);
+        eventPublisher.publishEvent(
+                new SaleCancelledEvent(sale.getId(), sale.getTotalAmount(), request.reason().name()));
     }
 
     @Transactional(readOnly = true)

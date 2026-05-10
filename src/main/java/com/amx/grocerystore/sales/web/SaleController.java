@@ -2,20 +2,25 @@ package com.amx.grocerystore.sales.web;
 
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.sales.application.SaleService;
+import com.amx.grocerystore.sales.web.dto.CancelSaleRequest;
 import com.amx.grocerystore.sales.web.dto.CreateSaleRequest;
 import com.amx.grocerystore.sales.web.dto.SaleResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/sales")
@@ -35,5 +40,11 @@ public class SaleController {
     @GetMapping
     public ResponseEntity<PageResponse<SaleResponse>> list(Pageable pageable) {
         return ResponseEntity.ok(saleService.list(pageable));
+    }
+
+    @PostMapping("/{id}/cancel")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancel(@PathVariable UUID id, @Valid @RequestBody CancelSaleRequest request) {
+        saleService.cancelSale(id, request);
     }
 }

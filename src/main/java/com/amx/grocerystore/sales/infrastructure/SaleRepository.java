@@ -9,12 +9,15 @@ import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface SaleRepository extends JpaRepository<Sale, UUID> {
 
     @Query("SELECT s FROM Sale s WHERE s.storeId = :storeId ORDER BY s.createdAt DESC")
     Page<Sale> findByStoreId(@Param("storeId") UUID storeId, Pageable pageable);
+
+    Optional<Sale> findByIdAndStoreId(UUID id, UUID storeId);
 
     @Query("""
             SELECT COALESCE(SUM(s.amountPaid), 0) FROM Sale s

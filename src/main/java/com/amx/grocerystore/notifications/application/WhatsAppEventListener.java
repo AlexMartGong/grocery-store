@@ -5,8 +5,10 @@ import com.amx.grocerystore.cash.web.dto.CashShiftResponse;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.domain.events.CustomerPaymentEvent;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
+import com.amx.grocerystore.inventory.domain.events.InventoryLossEvent;
 import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
 import com.amx.grocerystore.notifications.infrastructure.EvolutionWhatsAppClient;
+import com.amx.grocerystore.sales.domain.events.SaleCancelledEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
@@ -70,6 +72,27 @@ public class WhatsAppEventListener {
                 event.remainingStock(),
                 event.minStock()
         );
+        client.sendMessage(ownerPhone, text);
+    }
+
+    @Async
+    @EventListener
+    public void onSaleCancelled(SaleCancelledEvent event) {
+        String text = "🚨 *ALERTA ANTI-FRAUDE* 🚨\n"
+                + "Se ha cancelado una venta por un total de *$" + event.totalAmount() + "*.\n"
+                + "Motivo: " + event.reason() + "\n"
+                + "Ticket ID: " + event.saleId();
+        client.sendMessage(ownerPhone, text);
+    }
+
+    @Async
+    @EventListener
+    public void onInventoryLoss(InventoryLossEvent event) {
+        String text = "⚠️ *MERMA DE INVENTARIO* ⚠️\n"
+                + "Se registró una pérdida de producto.\n"
+                + "Producto: *" + event.productName() + "*\n"
+                + "Cantidad: " + event.quantity().abs() + "\n"
+                + "Notas: " + (event.notes() != null ? event.notes() : "Ninguna");
         client.sendMessage(ownerPhone, text);
     }
 }
