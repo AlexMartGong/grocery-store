@@ -2,6 +2,8 @@
 
 Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocery-store` project.
 
+> **Sibling doc:** `CLAUDE.md` is a near-duplicate maintained for Claude Code. Keep both in sync when editing architectural rules, env vars, or endpoint contracts.
+
 ## Role & Context
 
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
@@ -261,6 +263,9 @@ Strictly adhere to SOLID in every implementation:
   Hibernate will never alter the schema.
 - **DB connection:** Configured in `src/main/resources/application.properties` via env vars `DB_HOST`, `DB_PORT`,
   `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
+- **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
+  (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
+  via `app.security.jwt.issuer`. Evolution/WhatsApp env vars listed in the Notifications section above.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on
