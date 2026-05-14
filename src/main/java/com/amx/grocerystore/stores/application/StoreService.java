@@ -7,6 +7,7 @@ import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStatus;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import com.amx.grocerystore.stores.web.dto.CreateStoreRequest;
+import com.amx.grocerystore.stores.web.dto.StoreProfileResponse;
 import com.amx.grocerystore.stores.web.dto.StoreResponse;
 import com.amx.grocerystore.stores.web.dto.UpdateStoreRequest;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,13 @@ public class StoreService {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> NotFoundException.store(id));
         return StoreResponse.from(store);
+    }
+
+    @Transactional(readOnly = true)
+    public StoreProfileResponse getStoreProfile(UUID storeId) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        return StoreProfileResponse.from(store);
     }
 
     @Transactional(readOnly = true)
