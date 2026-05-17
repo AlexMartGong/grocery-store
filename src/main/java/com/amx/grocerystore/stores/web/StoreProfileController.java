@@ -2,6 +2,7 @@ package com.amx.grocerystore.stores.web;
 
 import com.amx.grocerystore.core.security.SecurityUtils;
 import com.amx.grocerystore.stores.application.StoreService;
+import com.amx.grocerystore.stores.web.dto.AgentUrlResponse;
 import com.amx.grocerystore.stores.web.dto.StoreProfileResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -21,5 +22,11 @@ public class StoreProfileController {
     @PreAuthorize("hasAnyRole('OWNER', 'CASHIER')")
     public ResponseEntity<StoreProfileResponse> getCurrent() {
         return ResponseEntity.ok(storeService.getStoreProfile(SecurityUtils.currentStoreId()));
+    }
+
+    @GetMapping("/me/agent")
+    @PreAuthorize("hasAnyRole('OWNER', 'CASHIER')")
+    public ResponseEntity<AgentUrlResponse> getAgentUrl() {
+        return ResponseEntity.ok(storeService.getAgentUrl(SecurityUtils.currentStoreId()));
     }
 }

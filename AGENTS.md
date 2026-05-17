@@ -82,7 +82,7 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `AccessDeniedException` | 403 | `forbidden` |
 | `AuthenticationException` (rest) | 401 | `unauthenticated` |
 | `MethodArgumentNotValidException` | 400 | `validation_failed` + `fields` |
-| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`) |
+| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`, `agent_url_not_found`) |
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
 | `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
@@ -215,6 +215,20 @@ DB owns the ledger: trigger `fn_register_credit` adds `amount_credited` to `cust
 INSERT when `amount_credited > 0 AND customer_id IS NOT NULL`; `fn_apply_sale_item` decrements stock per line. Service
 never mutates balance directly. `GET /api/v1/sales` paginated, scoped to `currentStoreId()`.
 
+### Print-Agent Bridge (Self-Healing IP Discovery)
+
+The local print agent loses its LAN IP on DHCP re-lease. `stores.agent_url` (`VARCHAR(100)`, nullable, mapped as
+`Store.agentUrl`) holds the agent's last-reported URL so the PWA never scans the LAN.
+
+- **Agent ingest:** `PUT /api/v1/agent/stores/{storeId}/url` (`StoreAgentController`) — public route,
+  whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth is the `X-Agent-Key` header matched
+  against `app.security.agent.api-key` (`AgentSecurityProperties`); mismatch/absent throws `AccessDeniedException`
+  (403 `forbidden`). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. Unknown store →
+  `NotFoundException.store` (404).
+- **PWA read:** `GET /api/v1/stores/me/agent` (`StoreProfileController`, `OWNER`/`CASHIER`) — JWT-scoped via
+  `SecurityUtils.currentStoreId()`. Returns `AgentUrlResponse(url)`; unregistered agent → 404 `agent_url_not_found`
+  (`NotFoundException.agentUrl()`).
+
 ### Notifications & Async Events
 
 Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher`
@@ -288,6 +302,8 @@ Strictly adhere to SOLID in every implementation:
 - **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
   (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
   via `app.security.jwt.issuer`. Evolution/WhatsApp env vars listed in the Notifications section above.
+  `AGENT_API_KEY` (default `default-agent-secret`, bound to `app.security.agent.api-key` via `AgentSecurityProperties`)
+  — shared static key for the print-agent bridge.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on

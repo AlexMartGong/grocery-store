@@ -34,6 +34,7 @@ CREATE TABLE stores
     owner_name VARCHAR(150),
     whatsapp   VARCHAR(20),
     address    TEXT, -- free text, no city/state split
+    agent_url  VARCHAR(100), -- local print-agent URL (DHCP self-healing bridge); NULL until first report
     status     VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
         CHECK (status IN ('ACTIVE', 'SUSPENDED', 'CANCELED')),
     created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()

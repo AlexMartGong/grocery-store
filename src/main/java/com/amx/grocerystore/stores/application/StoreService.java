@@ -6,6 +6,7 @@ import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStatus;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
+import com.amx.grocerystore.stores.web.dto.AgentUrlResponse;
 import com.amx.grocerystore.stores.web.dto.CreateStoreRequest;
 import com.amx.grocerystore.stores.web.dto.StoreProfileResponse;
 import com.amx.grocerystore.stores.web.dto.StoreResponse;
@@ -72,6 +73,24 @@ public class StoreService {
         store.setAddress(request.address());
         store.setStatus(request.status());
         return StoreResponse.from(storeRepository.save(store));
+    }
+
+    @Transactional
+    public void updateAgentUrl(UUID storeId, String url) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        store.setAgentUrl(url);
+        storeRepository.save(store);
+    }
+
+    @Transactional(readOnly = true)
+    public AgentUrlResponse getAgentUrl(UUID storeId) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        if (store.getAgentUrl() == null) {
+            throw NotFoundException.agentUrl();
+        }
+        return new AgentUrlResponse(store.getAgentUrl());
     }
 
     @Transactional
