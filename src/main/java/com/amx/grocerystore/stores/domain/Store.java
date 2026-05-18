@@ -58,10 +58,6 @@ public class Store {
     @Column(columnDefinition = "TEXT")
     private String address;
 
-    @Size(max = 100)
-    @Column(name = "agent_url", length = 100)
-    private String agentUrl;
-
     @NotNull
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

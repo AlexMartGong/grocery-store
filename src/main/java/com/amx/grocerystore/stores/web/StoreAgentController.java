@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/agent/stores")
+@RequestMapping("/api/v1/agent/stations")
 @RequiredArgsConstructor
 public class StoreAgentController {
 
@@ -26,15 +26,15 @@ public class StoreAgentController {
     private final StoreService storeService;
     private final AgentSecurityProperties agentProperties;
 
-    @PutMapping("/{storeId}/url")
+    @PutMapping("/{stationId}/url")
     public ResponseEntity<Void> updateAgentUrl(
-            @PathVariable UUID storeId,
+            @PathVariable UUID stationId,
             @RequestHeader(value = AGENT_KEY_HEADER, required = false) String agentKey,
             @Valid @RequestBody UpdateAgentUrlRequest request) {
         if (agentKey == null || !agentKey.equals(agentProperties.apiKey())) {
             throw new AccessDeniedException("invalid_agent_key");
         }
-        storeService.updateAgentUrl(storeId, request.url());
+        storeService.updateAgentUrl(stationId, request.url());
         return ResponseEntity.noContent().build();
     }
 }

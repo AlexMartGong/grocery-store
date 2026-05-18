@@ -60,7 +60,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/admin/login").permitAll()
-                        .requestMatchers(HttpMethod.PUT, "/api/v1/agent/stores/*/url").permitAll()
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/agent/stations/*/url").permitAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(eh -> eh.authenticationEntryPoint(jwtAuthenticationEntryPoint))

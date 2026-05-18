@@ -34,11 +34,24 @@ CREATE TABLE stores
     owner_name VARCHAR(150),
     whatsapp   VARCHAR(20),
     address    TEXT, -- free text, no city/state split
-    agent_url  VARCHAR(100), -- local print-agent URL (DHCP self-healing bridge); NULL until first report
     status     VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
         CHECK (status IN ('ACTIVE', 'SUSPENDED', 'CANCELED')),
     created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+-- Print stations (cajas) per store; each self-heals its own print-agent URL on DHCP re-lease
+CREATE TABLE store_stations
+(
+    id         UUID PRIMARY KEY      DEFAULT gen_random_uuid(),
+    store_id   UUID         NOT NULL REFERENCES stores (id),
+    name       VARCHAR(100) NOT NULL, -- e.g. 'Caja Principal'
+    agent_url  VARCHAR(100),          -- local print-agent URL; NULL until first report
+    status     VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
+        CHECK (status IN ('ACTIVE', 'SUSPENDED', 'CANCELED')),
+    created_at TIMESTAMPTZ           DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ           DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_store_stations_store_id ON store_stations (store_id);
 
 -- Links a store with a plan and tracks its billing cycle
 CREATE TABLE subscriptions

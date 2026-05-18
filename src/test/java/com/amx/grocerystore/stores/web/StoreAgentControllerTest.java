@@ -8,7 +8,8 @@ import com.amx.grocerystore.core.security.UserPrincipal;
 import com.amx.grocerystore.core.web.GlobalExceptionHandler;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.stores.application.StoreService;
-import com.amx.grocerystore.stores.web.dto.AgentUrlResponse;
+import com.amx.grocerystore.stores.domain.StoreStationStatus;
+import com.amx.grocerystore.stores.web.dto.StoreStationResponse;
 import com.amx.grocerystore.users.domain.UserRole;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,6 +23,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -42,8 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import({SecurityConfig.class, GlobalExceptionHandler.class})
 class StoreAgentControllerTest {
 
-    private static final String AGENT_URL = "/api/v1/agent/stores/%s/url";
-    private static final String ME_AGENT_URL = "/api/v1/stores/me/agent";
+    private static final String AGENT_URL = "/api/v1/agent/stations/%s/url";
+    private static final String ME_STATIONS_URL = "/api/v1/stores/me/stations";
     private static final String VALID_KEY = "test-agent-key";
 
     @Autowired
@@ -78,7 +80,7 @@ class StoreAgentControllerTest {
                 new UserPrincipal(UUID.randomUUID(), UUID.randomUUID(), "tester", role));
     }
 
-    // ---- Agent ingest: PUT /api/v1/agent/stores/{id}/url ----
+    // ---- Agent ingest: PUT /api/v1/agent/stations/{stationId}/url ----
 
     @Test
     void put_validKey_returns204() throws Exception {
@@ -141,10 +143,10 @@ class StoreAgentControllerTest {
     }
 
     @Test
-    void put_unknownStore_returns404() throws Exception {
+    void put_unknownStation_returns404() throws Exception {
         UUID id = UUID.randomUUID();
         doAnswer(inv -> {
-            throw NotFoundException.store(id);
+            throw NotFoundException.station(id);
         }).when(storeService).updateAgentUrl(eq(id), any());
 
         mvc.perform(put(AGENT_URL.formatted(id)).with(csrf())
@@ -154,33 +156,39 @@ class StoreAgentControllerTest {
                                 {"url":"http://192.168.1.50:9100"}
                                 """))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("store_not_found"));
+                .andExpect(jsonPath("$.error").value("station_not_found"));
     }
 
-    // ---- PWA read: GET /api/v1/stores/me/agent ----
+    // ---- PWA read: GET /api/v1/stores/me/stations ----
 
     @Test
-    void getMeAgent_authenticated_returns200() throws Exception {
-        given(storeService.getAgentUrl(any()))
-                .willReturn(new AgentUrlResponse("http://192.168.1.50:9100"));
+    void getMeStations_authenticated_returns200() throws Exception {
+        given(storeService.getStations(any()))
+                .willReturn(List.of(new StoreStationResponse(
+                        UUID.randomUUID(),
+                        "Caja Principal",
+                        "http://192.168.1.50:9100",
+                        StoreStationStatus.ACTIVE)));
 
-        mvc.perform(get(ME_AGENT_URL).with(authentication(tenant(UserRole.CASHIER))))
+        mvc.perform(get(ME_STATIONS_URL).with(authentication(tenant(UserRole.CASHIER))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.url").value("http://192.168.1.50:9100"));
+                .andExpect(jsonPath("$[0].name").value("Caja Principal"))
+                .andExpect(jsonPath("$[0].agentUrl").value("http://192.168.1.50:9100"))
+                .andExpect(jsonPath("$[0].status").value("ACTIVE"));
     }
 
     @Test
-    void getMeAgent_noUrlRegistered_returns404() throws Exception {
-        given(storeService.getAgentUrl(any())).willThrow(NotFoundException.agentUrl());
+    void getMeStations_noStations_returnsEmptyArray() throws Exception {
+        given(storeService.getStations(any())).willReturn(List.of());
 
-        mvc.perform(get(ME_AGENT_URL).with(authentication(tenant(UserRole.OWNER))))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("agent_url_not_found"));
+        mvc.perform(get(ME_STATIONS_URL).with(authentication(tenant(UserRole.OWNER))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
     }
 
     @Test
-    void getMeAgent_unauthenticated_returns401() throws Exception {
-        mvc.perform(get(ME_AGENT_URL))
+    void getMeStations_unauthenticated_returns401() throws Exception {
+        mvc.perform(get(ME_STATIONS_URL))
                 .andExpect(status().isUnauthorized());
     }
 }

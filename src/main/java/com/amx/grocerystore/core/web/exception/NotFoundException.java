@@ -46,7 +46,7 @@ public class NotFoundException extends RuntimeException {
         return new NotFoundException("sale_not_found", "Sale not found: " + id);
     }
 
-    public static NotFoundException agentUrl() {
-        return new NotFoundException("agent_url_not_found", "No agent URL registered for current store.");
+    public static NotFoundException station(UUID id) {
+        return new NotFoundException("station_not_found", "Store station not found: " + id);
     }
 }
