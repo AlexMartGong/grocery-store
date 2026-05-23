@@ -37,6 +37,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -302,17 +304,18 @@ class SaleServiceTest {
                 .items(List.of())
                 .build();
         Page<Sale> page = new PageImpl<>(List.of(sale), pageable, 1);
-        given(saleRepository.findByStoreId(STORE_ID, pageable)).willReturn(page);
+        given(saleRepository.findSales(eq(STORE_ID), isNull(), isNull(), eq(""), isNull(), isNull(), eq(pageable)))
+                .willReturn(page);
 
         PageResponse<SaleResponse> result;
         try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
             mocked.when(SecurityUtils::currentStoreId).thenReturn(STORE_ID);
-            result = saleService.list(pageable);
+            result = saleService.list(null, null, null, null, null, pageable);
         }
 
         assertThat(result.totalElements()).isEqualTo(1L);
         assertThat(result.content()).hasSize(1);
-        verify(saleRepository).findByStoreId(STORE_ID, pageable);
+        verify(saleRepository).findSales(eq(STORE_ID), isNull(), isNull(), eq(""), isNull(), isNull(), eq(pageable));
     }
 
     private Product activeProduct(UUID id) {

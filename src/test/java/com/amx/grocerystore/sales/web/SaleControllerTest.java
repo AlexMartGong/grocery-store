@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doAnswer;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -216,7 +217,7 @@ class SaleControllerTest {
                 new BigDecimal("50.00"), new BigDecimal("50.00"), new BigDecimal("0.00"),
                 null
         );
-        given(saleService.list(any(Pageable.class)))
+        given(saleService.list(isNull(), isNull(), isNull(), isNull(), isNull(), any(Pageable.class)))
                 .willReturn(new PageResponse<>(List.of(sale), 0, 20, 1L, 1));
 
         mvc.perform(get(URL))
