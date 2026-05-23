@@ -33,7 +33,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -162,9 +166,27 @@ public class SaleService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<SaleResponse> list(Pageable pageable) {
+    public PageResponse<SaleResponse> list(UUID customerId, SalePaymentMethod paymentMethod,
+                                           String search, LocalDate startDate, LocalDate endDate,
+                                           Pageable pageable) {
         UUID storeId = SecurityUtils.currentStoreId();
-        Page<Sale> page = saleRepository.findByStoreId(storeId, pageable);
+
+        if (customerId != null) {
+            customerRepository.findByIdAndStoreId(customerId, storeId)
+                    .orElseThrow(() -> NotFoundException.customer(customerId));
+        }
+
+        String searchTerm = (search == null) ? "" : search;
+        ZoneId zone = ZoneId.systemDefault();
+        OffsetDateTime from = (startDate == null)
+                ? OffsetDateTime.of(2000, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+                : startDate.atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime to = (endDate == null)
+                ? OffsetDateTime.of(2100, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+                : endDate.atTime(LocalTime.MAX).atZone(zone).toOffsetDateTime();
+
+        Page<Sale> page = saleRepository.findSales(
+                storeId, customerId, paymentMethod, searchTerm, from, to, pageable);
         return PageResponse.from(page.map(SaleResponse::from));
     }
 
