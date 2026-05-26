@@ -22,6 +22,9 @@ Spring Boot 4.0.5.
 | Single test method | `./mvnw test -Dtest=ClassName#methodName` |
 | Package | `./mvnw package` |
 | Run app | `./mvnw spring-boot:run` |
+| Static analysis | Qodana (`qodana scan` via Docker) — config in `qodana.yaml` |
+
+Qodana: `profile: qodana.starter`, linter `jetbrains/qodana-jvm-community:2026.1`, JDK 21. Runs in CI/CD; no failure thresholds set yet (`failureConditions` commented out).
 
 ## Architecture
 
@@ -325,6 +328,14 @@ Strictly adhere to SOLID in every implementation:
     - Enums: one Java `enum` per CHECK constraint, mapped with `@Enumerated(EnumType.STRING)`, colocated in the same
       `domain` package.
 - **Best Practices:** Always prioritize patterns defined in `.claude/skills/java-springboot/SKILL.md`.
+
+## Deployment & CI
+
+`.github/workflows/deploy.yml` — push to `master` triggers build + deploy to a Netcup Ubuntu VPS.
+- **Build:** Temurin JDK 21 (`actions/setup-java@v4`, Maven cache) → `./mvnw clean package -DskipTests` (tests gated to a separate flow).
+- **Transfer:** `appleboy/scp-action` copies `target/*.jar` → `/opt/grocery-store` (`strip_components: 1`). Spring Boot's `*.jar.original` does not match `*.jar`, so only the runnable jar ships.
+- **Restart:** `appleboy/ssh-action` renames `grocery-store-*.jar` → `/opt/grocery-store/ventacore.jar` (fixed name the unit points at — glob avoids clobbering the existing `ventacore.jar`), then `sudo systemctl restart ventacore` (deploy user has NOPASSWD) + `status --no-pager`.
+- **Required repo secrets:** `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`. systemd unit: `ventacore.service`.
 
 ## Testing Patterns
 

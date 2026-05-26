@@ -19,6 +19,7 @@ Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-
 - **Single test method:** `./mvnw test -Dtest=ClassName#methodName`
 - **Package:** `./mvnw package`
 - **Run application:** `./mvnw spring-boot:run`
+- **Static analysis (lint):** Qodana — config in `qodana.yaml` (`profile: qodana.starter`, linter `jetbrains/qodana-jvm-community:2026.1`, JDK 21). Runs in CI/CD; locally via `qodana scan` (Docker). No failure thresholds set yet (`failureConditions` commented out).
 
 ## Architecture
 
@@ -184,6 +185,14 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
 - `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`, `STORE_OWNER_PHONE` — Evolution / WhatsApp gateway.
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
+
+## Deployment & CI
+
+`.github/workflows/deploy.yml` — push to `master` triggers build + deploy to a Netcup Ubuntu VPS.
+- **Build:** Temurin JDK 21 (`actions/setup-java@v4`, Maven cache) → `./mvnw clean package -DskipTests` (tests gated to a separate flow).
+- **Transfer:** `appleboy/scp-action` copies `target/*.jar` → `/opt/grocery-store` (`strip_components: 1`). Spring Boot's `*.jar.original` does not match `*.jar`, so only the runnable jar ships.
+- **Restart:** `appleboy/ssh-action` renames `grocery-store-*.jar` → `/opt/grocery-store/ventacore.jar` (fixed name the unit points at — glob avoids clobbering the existing `ventacore.jar`), then `sudo systemctl restart ventacore` (deploy user has NOPASSWD) + `status --no-pager`.
+- **Required repo secrets:** `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`. systemd unit: `ventacore.service`.
 
 ## Testing
 
