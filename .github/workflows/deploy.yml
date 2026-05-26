@@ -1,0 +1,57 @@
+name: Deploy to Netcup VPS
+
+# Run only on push to master
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Pull repo source onto the runner
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Temurin JDK 21 with built-in Maven dependency cache
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Maven wrapper must be executable on the runner
+      - name: Make mvnw executable
+        run: chmod +x ./mvnw
+
+      # Package the app; tests run in a separate CI flow
+      - name: Build with Maven
+        run: ./mvnw clean package -DskipTests
+
+      # Copy only the jar; strip_components drops the leading "target/" dir
+      - name: Copy JAR to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "target/*.jar"
+          target: "/opt/grocery-store"
+          strip_components: 1
+
+      # Rename to the fixed name systemd expects, restart, print status
+      - name: Deploy & restart service
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Rename the freshly-uploaded versioned jar to the name the unit points at
+            mv /opt/grocery-store/grocery-store-*.jar /opt/grocery-store/ventacore.jar
+            # Restart the service (user has NOPASSWD for this)
+            sudo systemctl restart ventacore
+            # Print final status into the Actions log
+            sudo systemctl status ventacore --no-pager

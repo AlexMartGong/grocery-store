@@ -574,24 +574,12 @@ ORDER BY s.next_billing_date;
 -- SEED DATA
 -- =====================================================================
 
--- Standard plan (the only one for now)
-INSERT INTO subscription_plans (id, name, monthly_fee, setup_fee, description)
-VALUES ('00000000-0000-0000-0000-000000000001',
-        'Standard Plan', 499.00, 1490.00,
+-- Plan base (el ID se generará solo)
+INSERT INTO subscription_plans (name, monthly_fee, setup_fee, description)
+VALUES ('Standard Plan', 499.00, 1490.00,
         'Inventory, credit tracking and notifications from your phone');
 
--- Demo store
-INSERT INTO stores (id, code, name, owner_name, whatsapp, address)
-VALUES ('11111111-1111-1111-1111-111111111111', 'DEMO', 'Abarrotes Doña Lupe',
-        'Guadalupe Ramírez', '3741112222', 'Calle Hidalgo 45, Tequila');
-
--- Active subscription for the demo store
-INSERT INTO subscriptions (store_id, plan_id, next_billing_date)
-VALUES ('11111111-1111-1111-1111-111111111111',
-        '00000000-0000-0000-0000-000000000001',
-        CURRENT_DATE + INTERVAL '30 days');
-
--- Setup fee payment record
-INSERT INTO saas_payments (store_id, amount, concept, payment_method)
-VALUES ('11111111-1111-1111-1111-111111111111',
-        1490.00, 'SETUP_FEE', 'CASH');
+-- Usuario administrador (el ID se generará solo)
+INSERT INTO admin_users (username, password_hash, full_name, role, active)
+VALUES ('alex', '$2a$10$hV6a5BxRX52qbwMnvE1KaOCIXan23gNloybNr8hJqIcnYvptxAjYe', 'Alex Martinez', 'SUPER_ADMIN', TRUE)
+ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;
