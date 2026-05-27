@@ -135,13 +135,15 @@ A store has 1..N print stations (cajas). Each station's local print agent loses 
 
 Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher` **after the persistence call returns** — listeners treat the business outcome as final and never re-throw to the producer.
 
+**Owner-routed alerts are per-tenant.** Every owner-facing event carries `UUID storeId` as its first component; `WhatsAppEventListener.getStoreWhatsApp(storeId)` resolves the recipient via `StoreRepository.findById(storeId)` → `Store.whatsapp` (`null` if store/number missing — client no-ops). There is **no** global owner-phone setting; never reintroduce one.
+
 |Event|Publisher|Routed to|
 |-|-|-|
-|`ShiftClosedEvent`|`CashShiftService.close`|`${store.owner.phone}`|
-|`CustomerPaymentEvent`|`CustomerService.registerPayment`|customer phone|
-|`LowStockEvent`|`SaleService.createSale` (parsed from `notifications` rows post-sale)|`${store.owner.phone}`|
-|`SaleCancelledEvent`|`SaleService.cancelSale`|`${store.owner.phone}` (anti-fraud)|
-|`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|`${store.owner.phone}` (shrinkage)|
+|`ShiftClosedEvent`|`CashShiftService.close`|store WhatsApp (`event.storeId()`)|
+|`CustomerPaymentEvent`|`CustomerService.registerPayment`|customer phone (`event.customerPhone()`)|
+|`LowStockEvent`|`SaleService.createSale` (parsed from `notifications` rows post-sale)|store WhatsApp (`event.storeId()`)|
+|`SaleCancelledEvent`|`SaleService.cancelSale`|store WhatsApp (anti-fraud)|
+|`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store WhatsApp (shrinkage)|
 
 **Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`.
 
@@ -149,7 +151,7 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 
 `onInventoryLoss` uses `event.quantity().abs()` for display — `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are negative); ledger keeps the sign, the WhatsApp message shows magnitude.
 
-**When adding a new notification:** define event record under `<source-module>.domain.events`, publish from the service **after** persistence, add `@Async @EventListener` method on `WhatsAppEventListener` (or a new listener), route via `EvolutionWhatsAppClient.sendMessage(phone, text)`. **Do not** add HTTP error handling at the listener layer — the client owns failure isolation.
+**When adding a new notification:** define event record under `<source-module>.domain.events`, publish from the service **after** persistence, add `@Async @EventListener` method on `WhatsAppEventListener` (or a new listener), route via `EvolutionWhatsAppClient.sendMessage(phone, text)`. For owner-facing alerts, include `UUID storeId` on the event and resolve the recipient with `getStoreWhatsApp(event.storeId())` — never a static phone. **Do not** add HTTP error handling at the listener layer — the client owns failure isolation.
 
 ## SOLID Principles
 
@@ -183,7 +185,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 **Optional env vars:**
 - `JWT_EXPIRATION_MINUTES` (default `480`). Issuer hardcoded `grocery-store` via `app.security.jwt.issuer`.
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
-- `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`, `STORE_OWNER_PHONE` — Evolution / WhatsApp gateway.
+- `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE` — Evolution / WhatsApp gateway. (Owner alerts route to the per-store `Store.whatsapp` column — no global phone env var.)
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
 
 ## Deployment & CI

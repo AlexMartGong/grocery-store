@@ -264,24 +264,33 @@ annotated `@Async` so event publication never blocks the request thread.
 - Phone normalization: strip spaces, then prefix `52` only when the input is exactly 10 digits (Mexican local → E.164).
   `null` phone → log warn + return.
 - Configuration (`application.properties`):
-  `evolution.api.base-url`, `evolution.api.apikey`, `evolution.api.instance`, `store.owner.phone` — all overridable via
-  env vars (`EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`, `STORE_OWNER_PHONE`).
+  `evolution.api.base-url`, `evolution.api.apikey`, `evolution.api.instance` — all overridable via
+  env vars (`EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`). There is **no** global owner-phone
+  setting — owner alerts route per-tenant (see below).
 
-**Current listeners (`WhatsAppEventListener`):**
-- `onShiftClosed(ShiftClosedEvent)` → message to `${store.owner.phone}` with expected/real/difference balances.
+**Per-tenant owner routing.** Every owner-facing event carries `UUID storeId` as its first component;
+`WhatsAppEventListener.getStoreWhatsApp(storeId)` resolves the recipient via `StoreRepository.findById(storeId)` →
+`Store.whatsapp` (`null` if store/number missing — client no-ops). Never reintroduce a static owner-phone property.
+
+**Current listeners (`WhatsAppEventListener`, `@RequiredArgsConstructor` over `CustomerRepository`,
+`StoreRepository`, `EvolutionWhatsAppClient`):**
+- `onShiftClosed(ShiftClosedEvent)` → message to `getStoreWhatsApp(event.storeId())` with expected/real/difference
+  balances.
 - `onCustomerPayment(CustomerPaymentEvent)` → message to `event.customerPhone()` confirming the payment + new
   outstanding balance (re-read from `CustomerRepository`, since the trigger `fn_apply_payment` updates it post-commit).
-- `onLowStock(LowStockEvent)` → message to `${store.owner.phone}` warning about a product that's low or out of stock.
-- `onSaleCancelled(SaleCancelledEvent)` → message to `${store.owner.phone}` with anti-fraud alert (total amount,
-  reason, ticket id).
-- `onInventoryLoss(InventoryLossEvent)` → message to `${store.owner.phone}` with shrinkage alert. Uses
+- `onLowStock(LowStockEvent)` → message to `getStoreWhatsApp(event.storeId())` warning about a product that's low or
+  out of stock.
+- `onSaleCancelled(SaleCancelledEvent)` → message to `getStoreWhatsApp(event.storeId())` with anti-fraud alert (total
+  amount, reason, ticket id).
+- `onInventoryLoss(InventoryLossEvent)` → message to `getStoreWhatsApp(event.storeId())` with shrinkage alert. Uses
   `event.quantity().abs()` for display because `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are
   negative); the ledger keeps the sign, the WhatsApp message shows magnitude.
 
-When adding a new notification: define the event record under `<source-module>.domain.events`, publish from the
-service after the persistence call, add an `@Async @EventListener` method on `WhatsAppEventListener` (or a new
-listener), and route through `EvolutionWhatsAppClient.sendMessage(phone, text)`. Do **not** add new HTTP error
-handling at the listener layer — the client owns failure isolation.
+When adding a new notification: define the event record under `<source-module>.domain.events` (include `UUID storeId`
+for owner-facing alerts), publish from the service after the persistence call, add an `@Async @EventListener` method on
+`WhatsAppEventListener` (or a new listener), and route through `EvolutionWhatsAppClient.sendMessage(phone, text)` —
+using `getStoreWhatsApp(event.storeId())` for owner alerts. Do **not** add new HTTP error handling at the listener
+layer — the client owns failure isolation.
 
 ### FK Strategy (bounded-context friendly)
 
