@@ -94,7 +94,7 @@ public class CashShiftService {
         shift.setNotes(request.notes());
 
         CashShiftResponse response = CashShiftResponse.from(shiftRepository.save(shift));
-        eventPublisher.publishEvent(new ShiftClosedEvent(response));
+        eventPublisher.publishEvent(new ShiftClosedEvent(response.storeId(), response));
         return response;
     }
 

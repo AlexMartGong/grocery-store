@@ -9,8 +9,10 @@ import com.amx.grocerystore.inventory.domain.events.InventoryLossEvent;
 import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
 import com.amx.grocerystore.notifications.infrastructure.EvolutionWhatsAppClient;
 import com.amx.grocerystore.sales.domain.events.SaleCancelledEvent;
+import com.amx.grocerystore.stores.domain.Store;
+import com.amx.grocerystore.stores.infrastructure.StoreRepository;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -18,23 +20,21 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class WhatsAppEventListener {
 
     private final CustomerRepository customerRepository;
+    private final StoreRepository storeRepository;
     private final EvolutionWhatsAppClient client;
-    private final String ownerPhone;
 
-    public WhatsAppEventListener(
-            CustomerRepository customerRepository,
-            EvolutionWhatsAppClient client,
-            @Value("${store.owner.phone}") String ownerPhone
-    ) {
-        this.customerRepository = customerRepository;
-        this.client = client;
-        this.ownerPhone = ownerPhone;
+    private String getStoreWhatsApp(UUID storeId) {
+        return storeRepository.findById(storeId)
+                .map(Store::getWhatsapp)
+                .orElse(null);
     }
 
     @Async
@@ -47,7 +47,7 @@ public class WhatsAppEventListener {
                 shift.realBalance(),
                 shift.difference()
         );
-        client.sendMessage(ownerPhone, text);
+        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
     }
 
     @Async
@@ -74,7 +74,7 @@ public class WhatsAppEventListener {
                 event.remainingStock(),
                 event.minStock()
         );
-        client.sendMessage(ownerPhone, text);
+        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
     }
 
     @Async
@@ -84,7 +84,7 @@ public class WhatsAppEventListener {
                 + "Se ha cancelado una venta por un total de *$" + event.totalAmount() + "*.\n"
                 + "Motivo: " + translateReason(event.reason()) + "\n"
                 + "Ticket ID: " + event.saleId();
-        client.sendMessage(ownerPhone, text);
+        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
     }
 
     private String translateReason(String reason) {
@@ -105,6 +105,6 @@ public class WhatsAppEventListener {
                 + "Producto: *" + event.productName() + "*\n"
                 + "Cantidad: " + event.quantity().abs() + "\n"
                 + "Notas: " + (event.notes() != null ? event.notes() : "Ninguna");
-        client.sendMessage(ownerPhone, text);
+        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
     }
 }

@@ -49,7 +49,7 @@ public class InventoryService {
 
         if (request.reason() == InventoryReason.LOSS) {
             eventPublisher.publishEvent(
-                    new InventoryLossEvent(product.getName(), request.quantity(), request.notes()));
+                    new InventoryLossEvent(storeId, product.getName(), request.quantity(), request.notes()));
         }
     }
 }

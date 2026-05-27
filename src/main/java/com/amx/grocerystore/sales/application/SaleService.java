@@ -162,7 +162,7 @@ public class SaleService {
                 .build();
         saleCancellationRepository.save(cancellation);
         eventPublisher.publishEvent(
-                new SaleCancelledEvent(sale.getId(), sale.getTotalAmount(), request.reason().name()));
+                new SaleCancelledEvent(storeId, sale.getId(), sale.getTotalAmount(), request.reason().name()));
     }
 
     @Transactional(readOnly = true)
@@ -198,7 +198,7 @@ public class SaleService {
         }
         OffsetDateTime now = OffsetDateTime.now();
         for (Notification n : pending) {
-            LowStockEvent ev = parseLowStock(n);
+            LowStockEvent ev = parseLowStock(n, storeId);
             if (ev != null) {
                 eventPublisher.publishEvent(ev);
             }
@@ -207,7 +207,7 @@ public class SaleService {
         notificationRepository.saveAll(pending);
     }
 
-    private LowStockEvent parseLowStock(Notification n) {
+    private LowStockEvent parseLowStock(Notification n, UUID storeId) {
         String title = n.getTitle();
         String productName;
         if (title.startsWith(LOW_PREFIX)) {
@@ -223,6 +223,6 @@ public class SaleService {
             log.warn("low-stock notification {} message not parseable: {}", n.getId(), message);
             return null;
         }
-        return new LowStockEvent(productName, new BigDecimal(m.group(1)), new BigDecimal(m.group(2)));
+        return new LowStockEvent(storeId, productName, new BigDecimal(m.group(1)), new BigDecimal(m.group(2)));
     }
 }
