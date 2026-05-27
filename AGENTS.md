@@ -162,8 +162,8 @@ disallowed role, disallowed inventory reason, invalid payment split, etc.) — d
 repayment via `CreatePaymentRequest(amount @Positive)`. Returns 201 + `CustomerPaymentResponse`. DB trigger
 `fn_apply_payment` decrements `customers.outstanding_balance` AFTER INSERT; service never mutates the balance directly.
 After the JPA save returns, `CustomerService.registerPayment` publishes `CustomerPaymentEvent(payment, customerName,
-customerPhone)` via `ApplicationEventPublisher` so `WhatsAppEventListener.onCustomerPayment` can notify the customer
-asynchronously.
+customerPhone)` via `ApplicationEventPublisher` so `AdminNotificationEventListener.onCustomerPayment` can notify the
+customer asynchronously.
 
 **Customer balance encapsulation:** `Customer.outstandingBalance` is an accounting ledger column owned by DB triggers
 `fn_register_credit` (credit-sale → adds) and `fn_apply_payment` (payment → subtracts). Never expose it on write DTOs.
@@ -268,29 +268,41 @@ annotated `@Async` so event publication never blocks the request thread.
   env vars (`EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE`). There is **no** global owner-phone
   setting — owner alerts route per-tenant (see below).
 
-**Per-tenant owner routing.** Every owner-facing event carries `UUID storeId` as its first component;
-`WhatsAppEventListener.getStoreWhatsApp(storeId)` resolves the recipient via `StoreRepository.findById(storeId)` →
-`Store.whatsapp` (`null` if store/number missing — client no-ops). Never reintroduce a static owner-phone property.
+**Telegram via Bot API:**
+- `notifications.infrastructure.TelegramBotClient` (`@Service`) — official free Bot API, hardens admin alerts against
+  WhatsApp number bans. Wraps a `RestClient` (`baseUrl https://api.telegram.org`), POSTs to `/bot{token}/sendMessage`
+  with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)` (DTO under `notifications.infrastructure.dto`).
+- Token injected via an **explicit constructor** with `@Value("${telegram.bot.token:}")` — **not**
+  `@RequiredArgsConstructor` — to avoid the Lombok/`@Value` generated-constructor clash.
+- Same failure-isolation contract: `try-catch(Exception)` + `log.error`; empty token or empty `chatId` → `log.warn` +
+  return (no-op). Body is strictly `chat_id` + `text` (no `parse_mode`).
+- Configuration: `telegram.bot.token` ← env `TELEGRAM_BOT_TOKEN` (default empty).
 
-**Current listeners (`WhatsAppEventListener`, `@RequiredArgsConstructor` over `CustomerRepository`,
-`StoreRepository`, `EvolutionWhatsAppClient`):**
-- `onShiftClosed(ShiftClosedEvent)` → message to `getStoreWhatsApp(event.storeId())` with expected/real/difference
-  balances.
-- `onCustomerPayment(CustomerPaymentEvent)` → message to `event.customerPhone()` confirming the payment + new
-  outstanding balance (re-read from `CustomerRepository`, since the trigger `fn_apply_payment` updates it post-commit).
-- `onLowStock(LowStockEvent)` → message to `getStoreWhatsApp(event.storeId())` warning about a product that's low or
-  out of stock.
-- `onSaleCancelled(SaleCancelledEvent)` → message to `getStoreWhatsApp(event.storeId())` with anti-fraud alert (total
-  amount, reason, ticket id).
-- `onInventoryLoss(InventoryLossEvent)` → message to `getStoreWhatsApp(event.storeId())` with shrinkage alert. Uses
+**Per-tenant, per-channel owner routing.** Every owner-facing event carries `UUID storeId` as its first component;
+`AdminNotificationEventListener.sendAdminAlert(storeId, text)` loads the `Store` via `StoreRepository.findById(storeId)`
+and routes by `Store.preferredAdminChannel` (`AdminNotificationChannel`, `null`/default → `WHATSAPP`): `TELEGRAM` →
+`TelegramBotClient.sendMessage(store.getTelegramChatId(), text)`, `WHATSAPP` →
+`EvolutionWhatsAppClient.sendMessage(store.getWhatsapp(), text)`. Missing store/number → no-op. Never reintroduce a
+static owner-phone property.
+
+**Current listeners (`AdminNotificationEventListener`, `@RequiredArgsConstructor` over `CustomerRepository`,
+`StoreRepository`, `EvolutionWhatsAppClient`, `TelegramBotClient`):**
+- `onShiftClosed(ShiftClosedEvent)` → `sendAdminAlert(event.storeId(), …)` with expected/real/difference balances.
+- `onCustomerPayment(CustomerPaymentEvent)` → **WhatsApp only** (clients do not use Telegram):
+  `whatsappClient.sendMessage(event.customerPhone(), …)` confirming the payment + new outstanding balance (re-read from
+  `CustomerRepository`, since the trigger `fn_apply_payment` updates it post-commit).
+- `onLowStock(LowStockEvent)` → `sendAdminAlert(event.storeId(), …)` warning about a product that's low or out of stock.
+- `onSaleCancelled(SaleCancelledEvent)` → `sendAdminAlert(event.storeId(), …)` with anti-fraud alert (total amount,
+  reason, ticket id).
+- `onInventoryLoss(InventoryLossEvent)` → `sendAdminAlert(event.storeId(), …)` with shrinkage alert. Uses
   `event.quantity().abs()` for display because `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are
-  negative); the ledger keeps the sign, the WhatsApp message shows magnitude.
+  negative); the ledger keeps the sign, the message shows magnitude.
 
 When adding a new notification: define the event record under `<source-module>.domain.events` (include `UUID storeId`
 for owner-facing alerts), publish from the service after the persistence call, add an `@Async @EventListener` method on
-`WhatsAppEventListener` (or a new listener), and route through `EvolutionWhatsAppClient.sendMessage(phone, text)` —
-using `getStoreWhatsApp(event.storeId())` for owner alerts. Do **not** add new HTTP error handling at the listener
-layer — the client owns failure isolation.
+`AdminNotificationEventListener` (or a new listener). Route owner alerts through `sendAdminAlert(event.storeId(), text)`
+(channel-aware); route customer alerts through `EvolutionWhatsAppClient.sendMessage(phone, text)` directly. Do **not**
+add new HTTP error handling at the listener layer — the client owns failure isolation.
 
 ### FK Strategy (bounded-context friendly)
 
@@ -320,7 +332,7 @@ Strictly adhere to SOLID in every implementation:
   `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
 - **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
   (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
-  via `app.security.jwt.issuer`. Evolution/WhatsApp env vars listed in the Notifications section above.
+  via `app.security.jwt.issuer`. Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.
   `AGENT_API_KEY` (default `default-agent-secret`, bound to `app.security.agent.api-key` via `AgentSecurityProperties`)
   — shared static key for the print-agent bridge.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.

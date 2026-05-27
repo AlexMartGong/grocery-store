@@ -33,6 +33,9 @@ CREATE TABLE stores
     name       VARCHAR(150) NOT NULL,
     owner_name VARCHAR(150),
     whatsapp   VARCHAR(20),
+    telegram_chat_id        VARCHAR(50),
+    preferred_admin_channel VARCHAR(20)            DEFAULT 'WHATSAPP'
+        CHECK (preferred_admin_channel IN ('WHATSAPP', 'TELEGRAM')),
     address    TEXT, -- free text, no city/state split
     status     VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
         CHECK (status IN ('ACTIVE', 'SUSPENDED', 'CANCELED')),

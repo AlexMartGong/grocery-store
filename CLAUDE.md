@@ -135,23 +135,25 @@ A store has 1..N print stations (cajas). Each station's local print agent loses 
 
 Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher` **after the persistence call returns** — listeners treat the business outcome as final and never re-throw to the producer.
 
-**Owner-routed alerts are per-tenant.** Every owner-facing event carries `UUID storeId` as its first component; `WhatsAppEventListener.getStoreWhatsApp(storeId)` resolves the recipient via `StoreRepository.findById(storeId)` → `Store.whatsapp` (`null` if store/number missing — client no-ops). There is **no** global owner-phone setting; never reintroduce one.
+**Owner-routed alerts are per-tenant and per-channel.** Every owner-facing event carries `UUID storeId` as its first component; `AdminNotificationEventListener.sendAdminAlert(storeId, text)` loads the `Store` via `StoreRepository.findById(storeId)` and routes by `Store.preferredAdminChannel` (`AdminNotificationChannel` enum, `null`/default → `WHATSAPP`): `TELEGRAM` → `TelegramBotClient.sendMessage(store.getTelegramChatId(), text)`, `WHATSAPP` → `EvolutionWhatsAppClient.sendMessage(store.getWhatsapp(), text)`. Missing store/number → no-op. There is **no** global owner-phone setting; never reintroduce one. **Customer-facing** alerts (`onCustomerPayment`) bypass the switch and always use WhatsApp with `event.customerPhone()` — clients do not use Telegram.
 
 |Event|Publisher|Routed to|
 |-|-|-|
-|`ShiftClosedEvent`|`CashShiftService.close`|store WhatsApp (`event.storeId()`)|
-|`CustomerPaymentEvent`|`CustomerService.registerPayment`|customer phone (`event.customerPhone()`)|
-|`LowStockEvent`|`SaleService.createSale` (parsed from `notifications` rows post-sale)|store WhatsApp (`event.storeId()`)|
-|`SaleCancelledEvent`|`SaleService.cancelSale`|store WhatsApp (anti-fraud)|
-|`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store WhatsApp (shrinkage)|
+|`ShiftClosedEvent`|`CashShiftService.close`|store admin channel (`event.storeId()`)|
+|`CustomerPaymentEvent`|`CustomerService.registerPayment`|customer phone, WhatsApp only (`event.customerPhone()`)|
+|`LowStockEvent`|`SaleService.createSale` (parsed from `notifications` rows post-sale)|store admin channel (`event.storeId()`)|
+|`SaleCancelledEvent`|`SaleService.cancelSale`|store admin channel (anti-fraud)|
+|`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store admin channel (shrinkage)|
 
 **Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`.
 
 **WhatsApp via Evolution API:** `notifications.infrastructure.EvolutionWhatsAppClient` wraps a Spring Boot 4 `RestClient`, POSTs to `/message/sendText/{instance}` with `apikey` header + `EvolutionMessageRequest(number, text)`. HTTP call wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts are **swallowed by design** so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has already committed. Phone normalization: strip spaces, then prefix `52` only when input is exactly 10 digits (Mexican local → E.164). `null` phone → log warn + return.
 
+**Telegram via Bot API:** `notifications.infrastructure.TelegramBotClient` (`@Service`, official free Bot API — resilient to WhatsApp number bans) wraps a `RestClient` (`baseUrl https://api.telegram.org`), POSTs to `/bot{token}/sendMessage` with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)`. Token injected via **explicit constructor** `@Value("${telegram.bot.token:}")` (not `@RequiredArgsConstructor` — avoids the Lombok/`@Value` constructor clash). Same failure-isolation contract as the WhatsApp client: `try-catch(Exception)` + `log.error`; empty token or empty `chatId` → `log.warn` + return (no-op). No `parse_mode` sent (body is strictly `chat_id` + `text`).
+
 `onInventoryLoss` uses `event.quantity().abs()` for display — `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are negative); ledger keeps the sign, the WhatsApp message shows magnitude.
 
-**When adding a new notification:** define event record under `<source-module>.domain.events`, publish from the service **after** persistence, add `@Async @EventListener` method on `WhatsAppEventListener` (or a new listener), route via `EvolutionWhatsAppClient.sendMessage(phone, text)`. For owner-facing alerts, include `UUID storeId` on the event and resolve the recipient with `getStoreWhatsApp(event.storeId())` — never a static phone. **Do not** add HTTP error handling at the listener layer — the client owns failure isolation.
+**When adding a new notification:** define event record under `<source-module>.domain.events`, publish from the service **after** persistence, add `@Async @EventListener` method on `AdminNotificationEventListener` (or a new listener). For owner-facing alerts, include `UUID storeId` on the event and route via `sendAdminAlert(event.storeId(), text)` (channel-aware) — never a static phone. For customer-facing alerts, call `EvolutionWhatsAppClient.sendMessage(phone, text)` directly. **Do not** add HTTP error handling at the listener layer — the client owns failure isolation.
 
 ## SOLID Principles
 
@@ -186,6 +188,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - `JWT_EXPIRATION_MINUTES` (default `480`). Issuer hardcoded `grocery-store` via `app.security.jwt.issuer`.
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
 - `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE` — Evolution / WhatsApp gateway. (Owner alerts route to the per-store `Store.whatsapp` column — no global phone env var.)
+- `TELEGRAM_BOT_TOKEN` (default empty) — bound to `telegram.bot.token`, used by `TelegramBotClient` for stores with `preferred_admin_channel = 'TELEGRAM'`. Empty token → Telegram sends no-op. Owner alerts route to the per-store `Store.telegramChatId` column — no global chat-id env var.
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
 
 ## Deployment & CI

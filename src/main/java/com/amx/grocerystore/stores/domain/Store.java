@@ -55,6 +55,14 @@ public class Store {
     @Column(length = 20)
     private String whatsapp;
 
+    @Size(max = 50)
+    @Column(name = "telegram_chat_id", length = 50)
+    private String telegramChatId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "preferred_admin_channel", length = 20)
+    private AdminNotificationChannel preferredAdminChannel;
+
     @Column(columnDefinition = "TEXT")
     private String address;
 

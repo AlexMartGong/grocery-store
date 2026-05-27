@@ -8,7 +8,9 @@ import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
 import com.amx.grocerystore.inventory.domain.events.InventoryLossEvent;
 import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
 import com.amx.grocerystore.notifications.infrastructure.EvolutionWhatsAppClient;
+import com.amx.grocerystore.notifications.infrastructure.TelegramBotClient;
 import com.amx.grocerystore.sales.domain.events.SaleCancelledEvent;
+import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import lombok.RequiredArgsConstructor;
@@ -25,16 +27,30 @@ import java.util.UUID;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class WhatsAppEventListener {
+public class AdminNotificationEventListener {
 
     private final CustomerRepository customerRepository;
     private final StoreRepository storeRepository;
-    private final EvolutionWhatsAppClient client;
+    private final EvolutionWhatsAppClient whatsappClient;
+    private final TelegramBotClient telegramClient;
 
-    private String getStoreWhatsApp(UUID storeId) {
-        return storeRepository.findById(storeId)
-                .map(Store::getWhatsapp)
-                .orElse(null);
+    /**
+     * Routes an owner-facing alert to the store's preferred admin channel.
+     * Null channel falls back to WhatsApp. Missing store is a no-op.
+     */
+    private void sendAdminAlert(UUID storeId, String text) {
+        Store store = storeRepository.findById(storeId).orElse(null);
+        if (store == null) {
+            log.warn("Skip admin alert: store {} not found", storeId);
+            return;
+        }
+        AdminNotificationChannel channel = store.getPreferredAdminChannel() == null
+                ? AdminNotificationChannel.WHATSAPP
+                : store.getPreferredAdminChannel();
+        switch (channel) {
+            case TELEGRAM -> telegramClient.sendMessage(store.getTelegramChatId(), text);
+            case WHATSAPP -> whatsappClient.sendMessage(store.getWhatsapp(), text);
+        }
     }
 
     @Async
@@ -47,7 +63,7 @@ public class WhatsAppEventListener {
                 shift.realBalance(),
                 shift.difference()
         );
-        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
+        sendAdminAlert(event.storeId(), text);
     }
 
     @Async
@@ -62,7 +78,8 @@ public class WhatsAppEventListener {
                 event.payment().amount(),
                 newBalance
         );
-        client.sendMessage(event.customerPhone(), text);
+        // Customer-facing: WhatsApp only — clients do not use Telegram.
+        whatsappClient.sendMessage(event.customerPhone(), text);
     }
 
     @Async
@@ -74,7 +91,7 @@ public class WhatsAppEventListener {
                 event.remainingStock(),
                 event.minStock()
         );
-        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
+        sendAdminAlert(event.storeId(), text);
     }
 
     @Async
@@ -84,7 +101,7 @@ public class WhatsAppEventListener {
                 + "Se ha cancelado una venta por un total de *$" + event.totalAmount() + "*.\n"
                 + "Motivo: " + translateReason(event.reason()) + "\n"
                 + "Ticket ID: " + event.saleId();
-        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
+        sendAdminAlert(event.storeId(), text);
     }
 
     private String translateReason(String reason) {
@@ -105,6 +122,6 @@ public class WhatsAppEventListener {
                 + "Producto: *" + event.productName() + "*\n"
                 + "Cantidad: " + event.quantity().abs() + "\n"
                 + "Notas: " + (event.notes() != null ? event.notes() : "Ninguna");
-        client.sendMessage(getStoreWhatsApp(event.storeId()), text);
+        sendAdminAlert(event.storeId(), text);
     }
 }
