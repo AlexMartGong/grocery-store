@@ -6,6 +6,7 @@ import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
+import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.domain.UnitOfMeasure;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
@@ -61,6 +62,9 @@ class SaleServiceTest {
 
     @Mock
     private ProductRepository productRepository;
+
+    @Mock
+    private NotificationRepository notificationRepository;
 
     @InjectMocks
     private SaleService saleService;
@@ -304,7 +308,7 @@ class SaleServiceTest {
                 .items(List.of())
                 .build();
         Page<Sale> page = new PageImpl<>(List.of(sale), pageable, 1);
-        given(saleRepository.findSales(eq(STORE_ID), isNull(), isNull(), eq(""), isNull(), isNull(), eq(pageable)))
+        given(saleRepository.findSales(eq(STORE_ID), isNull(), isNull(), eq(""), any(), any(), eq(pageable)))
                 .willReturn(page);
 
         PageResponse<SaleResponse> result;
@@ -315,7 +319,7 @@ class SaleServiceTest {
 
         assertThat(result.totalElements()).isEqualTo(1L);
         assertThat(result.content()).hasSize(1);
-        verify(saleRepository).findSales(eq(STORE_ID), isNull(), isNull(), eq(""), isNull(), isNull(), eq(pageable));
+        verify(saleRepository).findSales(eq(STORE_ID), isNull(), isNull(), eq(""), any(), any(), eq(pageable));
     }
 
     private Product activeProduct(UUID id) {
