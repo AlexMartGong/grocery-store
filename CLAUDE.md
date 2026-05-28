@@ -87,6 +87,8 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 - `DuplicateResourceException` — uniqueness conflicts.
 - `NotFoundException` — missing resources.
 
+**Concurrency resilience (mandatory):** any service operation prone to deadlocks or concurrency-driven integrity violations — multi-row writes that contend on the same stock/balance rows under concurrent cashiers (e.g. `SaleService.createSale`, `cancelSale`) — **MUST** be wrapped in `@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))`. `@EnableRetry` keeps the retry advisor outer to `@Transactional` so each attempt rolls back and re-opens the tx; after attempts exhaust the original exception propagates → `GlobalExceptionHandler` → 409. Do **not** catch-and-swallow these inside the service.
+
 ### Management Endpoints
 
 CRUD endpoints share shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (paginated, optional filters), `PUT /{id}`, `DELETE /{id}` (soft delete via status flag — **never physical removal**).
@@ -145,7 +147,9 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 |`SaleCancelledEvent`|`SaleService.cancelSale`|store admin channel (anti-fraud)|
 |`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store admin channel (shrinkage)|
 
-**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication` (enables `@Retryable` on `SaleService` — see Sales endpoint).
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`. **Backpressure (mandatory):** the executor uses `CallerRunsPolicy` — a saturated queue makes the **calling thread** run the task inline (added latency, never a `RejectedExecutionException`/500 for the cashier), never `AbortPolicy`. **Graceful shutdown:** `setWaitForTasksToCompleteOnShutdown(true)` + `setAwaitTerminationSeconds(30)` so queued notifications drain (≤30s) on restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication` (enables `@Retryable` on `SaleService` — see Sales endpoint).
+
+**HTTP client rule (mandatory):** every outbound `RestClient` **MUST** be built on a `SimpleClientHttpRequestFactory` with strict `connectTimeout` 5s + `readTimeout` 10s (`Duration` setters). A timeout-less HTTP client is **prohibited** — a frozen upstream must never pin a request or `@Async` thread indefinitely. `EvolutionWhatsAppClient` and `TelegramBotClient` already comply; any new client follows the same contract.
 
 **WhatsApp via Evolution API:** `notifications.infrastructure.EvolutionWhatsAppClient` wraps a Spring Boot 4 `RestClient`, POSTs to `/message/sendText/{instance}` with `apikey` header + `EvolutionMessageRequest(number, text)`. **Timeouts mandatory:** the `RestClient` is built with a `SimpleClientHttpRequestFactory` (connect 5s, read 10s via `Duration` setters) so a frozen gateway can't pin `@Async` threads indefinitely. HTTP call wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts (`ResourceAccessException`, a `RuntimeException`) are **swallowed by design** so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has already committed. Phone normalization: strip spaces, then prefix `52` only when input is exactly 10 digits (Mexican local → E.164). `null` phone → log warn + return.
 
@@ -180,6 +184,8 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 ## Configuration
 
 DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`. HikariCP tuned in `application.properties` — `maximum-pool-size=25`, `minimum-idle=5` (widened for the per-request JWT DB revalidation + `@Async` notification listeners), `connection-timeout=30000`, `idle-timeout=600000`, `max-lifetime=1800000`.
+
+**DB safety valves (mandatory):** the pool also enforces `connection-init-sql=SET statement_timeout = '15s'` — PostgreSQL kills any query running >15s at the connection level, so a single hung query can never monopolize the pool — and `leak-detection-threshold=60000` — a connection held >60s logs a stack trace to surface leaked/un-closed connections. Keep both set; never widen the pool to mask a slow query.
 
 **Required env vars (boot fails without):**
 - `JWT_SECRET` — Base64-encoded; must decode to ≥32 bytes for HS256 (validated in `JwtProperties`).

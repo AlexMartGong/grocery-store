@@ -586,3 +586,21 @@ VALUES ('Standard Plan', 499.00, 1490.00,
 INSERT INTO admin_users (username, password_hash, full_name, role, active)
 VALUES ('alex', '$2a$10$hV6a5BxRX52qbwMnvE1KaOCIXan23gNloybNr8hJqIcnYvptxAjYe', 'Alex Martinez', 'SUPER_ADMIN', TRUE)
 ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;
+
+
+-- =====================================================================
+-- PHASE 1 HARDENING: hot-path indexes + inventory integrity floor
+-- =====================================================================
+
+-- Cover store-scoped, date-windowed audit/shift-close scans (avoid full scans under lock).
+CREATE INDEX idx_inv_movements_store_date ON inventory_movements(store_id, created_at);
+CREATE INDEX idx_cust_payments_store_date ON customer_payments(store_id, created_at);
+CREATE INDEX idx_shifts_store ON cash_register_shifts(store_id);
+
+-- Cross-module FK lookups (plain UUID columns, no JPA association).
+CREATE INDEX idx_sales_customer ON sales(customer_id);
+CREATE INDEX idx_sale_items_product ON sale_items(product_id);
+
+-- Enforce the no-oversell contract at the engine: a sale driving stock < 0
+-- now raises a CHECK violation (-> DataIntegrityViolationException -> 409 conflict).
+ALTER TABLE products ADD CONSTRAINT chk_positive_stock CHECK (current_stock >= 0);

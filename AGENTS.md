@@ -91,6 +91,14 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `DataIntegrityViolationException` | 409 | `conflict` |
 | Filter-layer (via entry point) | 401 | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
 
+**Concurrency resilience (mandatory):** any service operation prone to deadlocks or concurrency-driven integrity
+violations — multi-row writes contending on the same stock/balance rows under concurrent cashiers (e.g.
+`SaleService.createSale`, `cancelSale`) — **MUST** be wrapped in
+`@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))`.
+`@EnableRetry` keeps the retry advisor outer to `@Transactional` so each attempt rolls back and re-opens the tx; once
+attempts exhaust the original exception propagates → `GlobalExceptionHandler` → 409. Do **not** catch-and-swallow these
+inside the service.
+
 Seed test data: run `SeedTestAdminUsersTest` → SQL in `target/seed/test-admin-users.sql`.
 
 ### Management Endpoints
@@ -260,8 +268,17 @@ producer. Current publishers:
 
 **Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with a `ThreadPoolTaskExecutor`
 (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are
-annotated `@Async` so event publication never blocks the request thread. **Retry infra:** `@EnableRetry` sits on
-`GroceryStoreApplication`, enabling the `@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
+annotated `@Async` so event publication never blocks the request thread. **Backpressure (mandatory):** the executor
+uses `CallerRunsPolicy` — a saturated queue makes the **calling thread** run the task inline (added latency, never a
+`RejectedExecutionException`/500 for the cashier), never `AbortPolicy`. **Graceful shutdown:**
+`setWaitForTasksToCompleteOnShutdown(true)` + `setAwaitTerminationSeconds(30)` so queued notifications drain (≤30s) on
+restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication`, enabling the
+`@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
+
+**HTTP client rule (mandatory):** every outbound `RestClient` **MUST** be built on a `SimpleClientHttpRequestFactory`
+with strict `connectTimeout` 5s + `readTimeout` 10s (`Duration` setters). A timeout-less HTTP client is **prohibited** —
+a frozen upstream must never pin a request or `@Async` thread indefinitely. `EvolutionWhatsAppClient` and
+`TelegramBotClient` already comply; any new client follows the same contract.
 
 **WhatsApp via Evolution API:**
 - `notifications.infrastructure.EvolutionWhatsAppClient` (`@Service`) wraps a Spring Boot 4 `RestClient` and POSTs to
@@ -344,6 +361,10 @@ Strictly adhere to SOLID in every implementation:
   `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file:
   `maximum-pool-size=25`, `minimum-idle=5` (widened for per-request JWT DB revalidation + `@Async` listeners),
   `connection-timeout=30000`, `idle-timeout=600000`, `max-lifetime=1800000`.
+- **DB safety valves (mandatory):** the pool also enforces `connection-init-sql=SET statement_timeout = '15s'` —
+  PostgreSQL kills any query running >15s at the connection level, so a single hung query can never monopolize the
+  pool — and `leak-detection-threshold=60000` — a connection held >60s logs a stack trace to surface leaked/un-closed
+  connections. Keep both set; never widen the pool to mask a slow query.
 - **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
   (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
   via `app.security.jwt.issuer`. Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.
