@@ -26,8 +26,12 @@ import com.amx.grocerystore.sales.web.dto.SaleResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,6 +64,9 @@ public class SaleService {
     private final NotificationRepository notificationRepository;
     private final ApplicationEventPublisher eventPublisher;
 
+    @Retryable(
+            retryFor = {DataIntegrityViolationException.class, CannotAcquireLockException.class},
+            backoff = @Backoff(delay = 200, multiplier = 2))
     @Transactional
     public SaleResponse createSale(CreateSaleRequest request) {
         UUID storeId = SecurityUtils.currentStoreId();
@@ -145,6 +152,9 @@ public class SaleService {
         return response;
     }
 
+    @Retryable(
+            retryFor = {DataIntegrityViolationException.class, CannotAcquireLockException.class},
+            backoff = @Backoff(delay = 200, multiplier = 2))
     @Transactional
     public void cancelSale(UUID saleId, CancelSaleRequest request) {
         UUID storeId = SecurityUtils.currentStoreId();

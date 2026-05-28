@@ -4,8 +4,11 @@ import com.amx.grocerystore.notifications.infrastructure.dto.EvolutionMessageReq
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+
+import java.time.Duration;
 
 @Slf4j
 @Service
@@ -20,9 +23,13 @@ public class EvolutionWhatsAppClient {
             @Value("${evolution.api.instance}") String instance
     ) {
         this.instance = instance;
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofSeconds(5));
+        requestFactory.setReadTimeout(Duration.ofSeconds(10));
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("apikey", apiKey)
+                .requestFactory(requestFactory)
                 .build();
     }
 

@@ -9,7 +9,7 @@ Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocer
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
 Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — the `@SpringBootApplication` entry point is `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`).
 **Tooling:** Use the Maven wrapper (`./mvnw`) for all build and test commands.
 
 ## Build & Development Commands
@@ -203,7 +203,7 @@ trigger `fn_cancel_sale` (script.sql) flips `sales.status` to `CANCELED`, return
 `sale.status` directly. Idempotent: re-cancel returns 409 `sale_already_canceled`. Cross-store access returns
 `sale_not_found`. Repo additions: `SaleRepository.findByIdAndStoreId`, new `SaleCancellationRepository`.
 After save, publishes `SaleCancelledEvent(saleId, totalAmount, reason.name())` via `ApplicationEventPublisher`
-for the anti-fraud WhatsApp alert.
+for the anti-fraud WhatsApp alert. Carries the same `@Retryable` deadlock policy as `createSale` (see Sales endpoint).
 
 **Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
 (`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +
@@ -217,6 +217,13 @@ for the anti-fraud WhatsApp alert.
 DB owns the ledger: trigger `fn_register_credit` adds `amount_credited` to `customers.outstanding_balance` AFTER
 INSERT when `amount_credited > 0 AND customer_id IS NOT NULL`; `fn_apply_sale_item` decrements stock per line. Service
 never mutates balance directly. `GET /api/v1/sales` paginated, scoped to `currentStoreId()`.
+**Deadlock retry:** `SaleService.createSale` and `cancelSale` carry
+`@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))`
+— default 3 attempts (200ms, 400ms). Concurrent cashiers tripping a PostgreSQL deadlock (`40P01` →
+`CannotAcquireLockException`) retry on a fresh transaction instead of returning 500. `@EnableRetry` (on
+`GroceryStoreApplication`) keeps the retry advisor outer to `@Transactional` (precedence `LOWEST_PRECEDENCE - 1`), so
+each attempt rolls back and re-opens the tx; once attempts exhaust, the original exception propagates →
+`GlobalExceptionHandler` → 409 (no recovery method).
 
 ### Print-Agent Bridge (Self-Healing IP Discovery)
 
@@ -229,9 +236,10 @@ mapped as `StoreStation.agentUrl`) keeps the agent's last-reported URL so the PW
 API — stations are seeded via SQL.
 
 - **Agent ingest:** `PUT /api/v1/agent/stations/{stationId}/url` (`StoreAgentController`) — public route,
-  whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth is the `X-Agent-Key` header matched
-  against `app.security.agent.api-key` (`AgentSecurityProperties`); mismatch/absent throws `AccessDeniedException`
-  (403 `forbidden`). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. `StoreService
+  whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth is the `X-Agent-Key` header compared
+  **timing-safe** via `MessageDigest.isEqual(...)` (UTF-8 bytes) against `app.security.agent.api-key`
+  (`AgentSecurityProperties`); null/mismatch throws `AccessDeniedException` (403 `forbidden`). Never `String.equals`
+  here (timing attack). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. `StoreService
   .updateAgentUrl(stationId, url)` loads the station by id and writes `agentUrl`. Unknown station → 404
   `station_not_found` (`NotFoundException.station(id)`).
 - **PWA read:** `GET /api/v1/stores/me/stations` (`StoreProfileController`, `OWNER`/`CASHIER`) — JWT-scoped via
@@ -252,15 +260,18 @@ producer. Current publishers:
 
 **Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with a `ThreadPoolTaskExecutor`
 (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are
-annotated `@Async` so event publication never blocks the request thread.
+annotated `@Async` so event publication never blocks the request thread. **Retry infra:** `@EnableRetry` sits on
+`GroceryStoreApplication`, enabling the `@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
 
 **WhatsApp via Evolution API:**
 - `notifications.infrastructure.EvolutionWhatsAppClient` (`@Service`) wraps a Spring Boot 4 `RestClient` and POSTs to
   `/message/sendText/{instance}` with `apikey` header and body `EvolutionMessageRequest(number, text)` (DTO under
   `notifications.infrastructure.dto`).
-- The HTTP call is wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts are
-  swallowed by design so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has
-  already committed.
+- **Timeouts mandatory:** the `RestClient` is built with a `SimpleClientHttpRequestFactory` (connect 5s, read 10s via
+  `Duration` setters) so a frozen gateway can't pin `@Async` threads indefinitely.
+- The HTTP call is wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts
+  (`ResourceAccessException`, a `RuntimeException`) are swallowed by design so `@Async` threads never propagate
+  stacktraces. Notifications are best-effort; the domain has already committed.
 - Phone normalization: strip spaces, then prefix `52` only when the input is exactly 10 digits (Mexican local → E.164).
   `null` phone → log warn + return.
 - Configuration (`application.properties`):
@@ -270,7 +281,8 @@ annotated `@Async` so event publication never blocks the request thread.
 
 **Telegram via Bot API:**
 - `notifications.infrastructure.TelegramBotClient` (`@Service`) — official free Bot API, hardens admin alerts against
-  WhatsApp number bans. Wraps a `RestClient` (`baseUrl https://api.telegram.org`), POSTs to `/bot{token}/sendMessage`
+  WhatsApp number bans. Wraps a `RestClient` (`baseUrl https://api.telegram.org`, same `SimpleClientHttpRequestFactory`
+  5s/10s timeouts as the WhatsApp client), POSTs to `/bot{token}/sendMessage`
   with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)` (DTO under `notifications.infrastructure.dto`).
 - Token injected via an **explicit constructor** with `@Value("${telegram.bot.token:}")` — **not**
   `@RequiredArgsConstructor` — to avoid the Lombok/`@Value` generated-constructor clash.
@@ -329,7 +341,9 @@ Strictly adhere to SOLID in every implementation:
 - **Schema validation:** `spring.jpa.hibernate.ddl-auto=validate` — entity mappings must match `script.sql` exactly;
   Hibernate will never alter the schema.
 - **DB connection:** Configured in `src/main/resources/application.properties` via env vars `DB_HOST`, `DB_PORT`,
-  `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file.
+  `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (all with `localhost`/dev defaults). HikariCP pool tuned in the same file:
+  `maximum-pool-size=25`, `minimum-idle=5` (widened for per-request JWT DB revalidation + `@Async` listeners),
+  `connection-timeout=30000`, `idle-timeout=600000`, `max-lifetime=1800000`.
 - **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
   (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
   via `app.security.jwt.issuer`. Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.

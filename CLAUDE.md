@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — entry point `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`).
 **Tooling:** Maven wrapper (`./mvnw`) for all build/test commands.
 
 ## Build & Development Commands
@@ -115,8 +115,8 @@ CRUD endpoints share shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (pagin
 - **`GET /api/v1/cash/shifts/current`** (`OWNER`/`CASHIER`) — or `open_shift_not_found`.
 - **`POST /api/v1/cash/shifts/current/close`** (`OWNER`/`CASHIER`) — computed `expected_balance = opening + cashSales + cashPayments` (windowed `opened_at`→close), `difference = real − expected`. `cashSales` = Σ `amount_paid` for `CASH`/`MIXED` `COMPLETED` sales; `cashPayments` = Σ `customer_payments.amount`. Publishes `ShiftClosedEvent`.
 - **`GET /api/v1/cash/shifts`** (`OWNER`) — paginated audit history, `opened_at DESC`.
-- **`POST /api/v1/sales`** (`OWNER`/`CASHIER`) — `total = Σ(qty × unitPrice)` `HALF_UP` scale 2. Payment-method rules in `SaleService`: `CASH`/`CARD`/`TRANSFER` → full pay; `CREDIT` → customer + credit-limit check; `MIXED` → customer + strict `0 < amount_paid < total`, credit-limit checked against `amountCredited` only. Triggers `fn_register_credit` / `fn_apply_sale_item` own balance + stock.
-- **`POST /api/v1/sales/{id}/cancel`** (`OWNER`/`CASHIER`) — inserts `SaleCancellation`. Trigger `fn_cancel_sale` flips status, returns stock (`inventory_movements` reason `CANCELLATION`), reverses credit. Service must NOT mutate `sale.status`. Idempotent: 409 `sale_already_canceled`. Publishes `SaleCancelledEvent`.
+- **`POST /api/v1/sales`** (`OWNER`/`CASHIER`) — `total = Σ(qty × unitPrice)` `HALF_UP` scale 2. Payment-method rules in `SaleService`: `CASH`/`CARD`/`TRANSFER` → full pay; `CREDIT` → customer + credit-limit check; `MIXED` → customer + strict `0 < amount_paid < total`, credit-limit checked against `amountCredited` only. Triggers `fn_register_credit` / `fn_apply_sale_item` own balance + stock. **Deadlock retry:** `SaleService.createSale` (and `cancelSale`) carry `@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))` — default 3 attempts (200ms, 400ms) so concurrent cashiers hitting a PostgreSQL deadlock (`40P01` → `CannotAcquireLockException`) retry on a fresh transaction instead of 500ing. `@EnableRetry` (on `GroceryStoreApplication`) makes the retry advisor outer to `@Transactional` (higher precedence: `LOWEST_PRECEDENCE - 1`), so each attempt rolls back and re-opens the tx. After attempts exhaust, the original exception propagates → `GlobalExceptionHandler` → 409 (no recovery method).
+- **`POST /api/v1/sales/{id}/cancel`** (`OWNER`/`CASHIER`) — inserts `SaleCancellation`. Trigger `fn_cancel_sale` flips status, returns stock (`inventory_movements` reason `CANCELLATION`), reverses credit. Service must NOT mutate `sale.status`. Idempotent: 409 `sale_already_canceled`. Same `@Retryable` deadlock policy as `createSale`. Publishes `SaleCancelledEvent`.
 
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, `@Enumerated(EnumType.STRING)`, column `unit_of_measure VARCHAR(10)`.
 
@@ -128,7 +128,7 @@ A store has 1..N print stations (cajas). Each station's local print agent loses 
 
 `StoreStation` is an intra-`stores`-module aggregate member: `@ManyToOne(fetch = LAZY)` to `Store`, plus `name`, `agentUrl`, `status` (`StoreStationStatus`: `ACTIVE`/`SUSPENDED`/`CANCELED`). Repository in `stores.infrastructure`. **Station creation is not yet exposed via API — stations are seeded via SQL.**
 
-- **Agent ingest:** `PUT /api/v1/agent/stations/{stationId}/url` (`StoreAgentController`) — public route whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth via `X-Agent-Key` header matched against `app.security.agent.api-key` (`AgentSecurityProperties`); mismatch/absent → `AccessDeniedException` (403 `forbidden`). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. Unknown station → 404 `station_not_found`.
+- **Agent ingest:** `PUT /api/v1/agent/stations/{stationId}/url` (`StoreAgentController`) — public route whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth via `X-Agent-Key` header compared **timing-safe** with `MessageDigest.isEqual(...)` (UTF-8 bytes) against `app.security.agent.api-key` (`AgentSecurityProperties`); null/mismatch → `AccessDeniedException` (403 `forbidden`). Never use `String.equals` here (timing attack). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. Unknown station → 404 `station_not_found`.
 - **PWA read:** `GET /api/v1/stores/me/stations` (`StoreProfileController`, `OWNER`/`CASHIER`) — JWT-scoped via `SecurityUtils.currentStoreId()`. Returns `List<StoreStationResponse>` (`id`, `name`, `agentUrl`, `status`) via `StoreStationRepository.findByStoreIdAndStatusNot(storeId, CANCELED)`. `CANCELED` excluded; empty list (never 404).
 
 ### Notifications & Async Events
@@ -145,11 +145,11 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 |`SaleCancelledEvent`|`SaleService.cancelSale`|store admin channel (anti-fraud)|
 |`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store admin channel (shrinkage)|
 
-**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`.
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication` (enables `@Retryable` on `SaleService` — see Sales endpoint).
 
-**WhatsApp via Evolution API:** `notifications.infrastructure.EvolutionWhatsAppClient` wraps a Spring Boot 4 `RestClient`, POSTs to `/message/sendText/{instance}` with `apikey` header + `EvolutionMessageRequest(number, text)`. HTTP call wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts are **swallowed by design** so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has already committed. Phone normalization: strip spaces, then prefix `52` only when input is exactly 10 digits (Mexican local → E.164). `null` phone → log warn + return.
+**WhatsApp via Evolution API:** `notifications.infrastructure.EvolutionWhatsAppClient` wraps a Spring Boot 4 `RestClient`, POSTs to `/message/sendText/{instance}` with `apikey` header + `EvolutionMessageRequest(number, text)`. **Timeouts mandatory:** the `RestClient` is built with a `SimpleClientHttpRequestFactory` (connect 5s, read 10s via `Duration` setters) so a frozen gateway can't pin `@Async` threads indefinitely. HTTP call wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts (`ResourceAccessException`, a `RuntimeException`) are **swallowed by design** so `@Async` threads never propagate stacktraces. Notifications are best-effort; the domain has already committed. Phone normalization: strip spaces, then prefix `52` only when input is exactly 10 digits (Mexican local → E.164). `null` phone → log warn + return.
 
-**Telegram via Bot API:** `notifications.infrastructure.TelegramBotClient` (`@Service`, official free Bot API — resilient to WhatsApp number bans) wraps a `RestClient` (`baseUrl https://api.telegram.org`), POSTs to `/bot{token}/sendMessage` with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)`. Token injected via **explicit constructor** `@Value("${telegram.bot.token:}")` (not `@RequiredArgsConstructor` — avoids the Lombok/`@Value` constructor clash). Same failure-isolation contract as the WhatsApp client: `try-catch(Exception)` + `log.error`; empty token or empty `chatId` → `log.warn` + return (no-op). No `parse_mode` sent (body is strictly `chat_id` + `text`).
+**Telegram via Bot API:** `notifications.infrastructure.TelegramBotClient` (`@Service`, official free Bot API — resilient to WhatsApp number bans) wraps a `RestClient` (`baseUrl https://api.telegram.org`, same `SimpleClientHttpRequestFactory` 5s/10s timeouts as the WhatsApp client), POSTs to `/bot{token}/sendMessage` with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)`. Token injected via **explicit constructor** `@Value("${telegram.bot.token:}")` (not `@RequiredArgsConstructor` — avoids the Lombok/`@Value` constructor clash). Same failure-isolation contract as the WhatsApp client: `try-catch(Exception)` + `log.error`; empty token or empty `chatId` → `log.warn` + return (no-op). No `parse_mode` sent (body is strictly `chat_id` + `text`).
 
 `onInventoryLoss` uses `event.quantity().abs()` for display — `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are negative); ledger keeps the sign, the WhatsApp message shows magnitude.
 
@@ -179,7 +179,7 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 
 ## Configuration
 
-DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`. HikariCP tuned in `application.properties`.
+DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`. HikariCP tuned in `application.properties` — `maximum-pool-size=25`, `minimum-idle=5` (widened for the per-request JWT DB revalidation + `@Async` notification listeners), `connection-timeout=30000`, `idle-timeout=600000`, `max-lifetime=1800000`.
 
 **Required env vars (boot fails without):**
 - `JWT_SECRET` — Base64-encoded; must decode to ≥32 bytes for HS256 (validated in `JwtProperties`).

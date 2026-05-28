@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.UUID;
 
 @RestController
@@ -31,7 +33,9 @@ public class StoreAgentController {
             @PathVariable UUID stationId,
             @RequestHeader(value = AGENT_KEY_HEADER, required = false) String agentKey,
             @Valid @RequestBody UpdateAgentUrlRequest request) {
-        if (agentKey == null || !agentKey.equals(agentProperties.apiKey())) {
+        if (agentKey == null || !MessageDigest.isEqual(
+                agentKey.getBytes(StandardCharsets.UTF_8),
+                agentProperties.apiKey().getBytes(StandardCharsets.UTF_8))) {
             throw new AccessDeniedException("invalid_agent_key");
         }
         storeService.updateAgentUrl(stationId, request.url());
