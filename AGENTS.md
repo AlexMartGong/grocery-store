@@ -7,9 +7,9 @@ Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocer
 ## Role & Context
 
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
-Spring Boot 4.0.5.
+Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — the `@SpringBootApplication` entry point is `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation.
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`).
 **Tooling:** Use the Maven wrapper (`./mvnw`) for all build and test commands.
 
 ## Build & Development Commands
@@ -363,6 +363,8 @@ Strictly adhere to SOLID in every implementation:
 - **Service tests:** Pure Mockito (`@ExtendWith(MockitoExtension.class)`), no Spring context.
 - **Controller tests:** `@WebMvcTest` + `@Import({SecurityConfig.class, GlobalExceptionHandler.class})`. Mock
   filter/entry point as `@MockitoBean`.
+- **Env-dependent:** `GroceryStoreApplicationTests.contextLoads` (`@SpringBootTest`) opens a real DataSource —
+  requires a running PostgreSQL matching `DB_*` env vars. Expected to fail locally without DB; not a regression.
 - **Seed tests:** `SeedTestAdminUsersTest` generates SQL to `target/seed/test-admin-users.sql`.
 
 ## Expected Output Format

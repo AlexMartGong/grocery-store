@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Role & Context
 
-Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.0.5.
+Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — entry point `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation.
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`).
 **Tooling:** Maven wrapper (`./mvnw`) for all build/test commands.
 
 ## Build & Development Commands
@@ -204,6 +204,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - **JUnit 5** via Spring Boot test starters (JPA, Security, Web MVC). Lombok annotation processing configured for main + test compilation.
 - **Service tests:** pure Mockito (`@ExtendWith(MockitoExtension.class)`), no Spring context.
 - **Controller tests:** `@WebMvcTest` + `@Import({SecurityConfig.class, GlobalExceptionHandler.class})`; mock filter/entry point with `@MockitoBean`.
+- **Env-dependent:** `GroceryStoreApplicationTests.contextLoads` (`@SpringBootTest`) opens a real DataSource — requires a running PostgreSQL matching `DB_*` env vars. Expected to fail locally without DB; not a regression.
 - **Seed test data:** run `SeedTestAdminUsersTest` and `SeedTestUsersTest` → SQL written to `target/seed/*.sql`.
 
 ## Expected Output Format
