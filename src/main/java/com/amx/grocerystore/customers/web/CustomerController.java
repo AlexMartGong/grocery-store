@@ -29,12 +29,12 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/customers")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('OWNER','CASHIER')")
 public class CustomerController {
 
     private final CustomerService customerService;
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('OWNER')")
     public ResponseEntity<CustomerResponse> create(@Valid @RequestBody CreateCustomerRequest request) {
         CustomerResponse response = customerService.create(request);
         return ResponseEntity.created(URI.create("/api/v1/customers/" + response.id()))
@@ -42,11 +42,13 @@ public class CustomerController {
     }
 
     @GetMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER','CASHIER')")
     public ResponseEntity<CustomerResponse> get(@PathVariable UUID id) {
         return ResponseEntity.ok(customerService.findById(id));
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER','CASHIER')")
     public ResponseEntity<PageResponse<CustomerResponse>> list(
             @RequestParam(required = false) Boolean active,
             @RequestParam(required = false) String search,
@@ -55,12 +57,14 @@ public class CustomerController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER')")
     public ResponseEntity<CustomerResponse> update(@PathVariable UUID id,
                                                    @Valid @RequestBody UpdateCustomerRequest request) {
         return ResponseEntity.ok(customerService.update(id, request));
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER')")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         customerService.softDelete(id);
         return ResponseEntity.noContent().build();
