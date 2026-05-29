@@ -9,7 +9,7 @@ Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocer
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
 Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — the `@SpringBootApplication` entry point is `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting).
 **Tooling:** Use the Maven wrapper (`./mvnw`) for all build and test commands.
 
 ## Build & Development Commands
@@ -72,6 +72,14 @@ Rejection delegates to `JwtAuthenticationEntryPoint`, which writes a JSON `Error
 The filter throws `AccountInactiveException(code)` for revoked state; claim/signature parse failures throw
 `InsufficientAuthenticationException("invalid_token")`.
 
+**Login rate limiting (mandatory):** `AuthRateLimitFilter` (`core.security`, `OncePerRequestFilter`) sits ahead of
+`JwtAuthenticationFilter` (`addFilterBefore(authRateLimitFilter, JwtAuthenticationFilter.class)`) and acts **only** on
+`POST /api/v1/auth/login` + `POST /api/v1/admin/login` (`shouldNotFilter` skips everything else). Per-IP token bucket
+(bucket4j, keyed by `request.getRemoteAddr()`): 10 attempts/minute, greedy refill. Overflow short-circuits with 429
+`too_many_requests` + `Retry-After: 60` (writes `ErrorResponse` via the Jackson `ObjectMapper`, never calls the chain).
+Buckets live in an in-memory `ConcurrentHashMap` — `getRemoteAddr()` is the proxy IP behind a reverse proxy;
+`X-Forwarded-For` parsing + distributed/Redis-backed buckets are a future hardening, not yet wired.
+
 ### Exception Handling
 
 `core.web.GlobalExceptionHandler` is the single `@RestControllerAdvice` (no per-controller advices).
@@ -89,6 +97,7 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
 | `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
+| Rate-limit filter (`AuthRateLimitFilter`) | 429 | `too_many_requests` (+ `Retry-After: 60`) |
 | Filter-layer (via entry point) | 401 | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
 
 **Concurrency resilience (mandatory):** any service operation prone to deadlocks or concurrency-driven integrity
@@ -215,8 +224,12 @@ for the anti-fraud WhatsApp alert. Carries the same `@Retryable` deadlock policy
 
 **Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
 (`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +
-`SaleResponse`. `total = Σ(quantity × unitPrice)` rounded `HALF_UP` to scale 2. Payment-method rules:
-- `CASH` / `CARD` / `TRANSFER`: `amountPaid = total`, `amountCredited = 0`. No customer required.
+`SaleResponse`. `total = Σ(quantity × unitPrice)` rounded `HALF_UP` to scale 2.
+**Tenant scoping (VULN-01):** a non-null `customer_id` is validated against the store via
+`customerRepository.findByIdAndStoreId(...)` **before** the payment switch — for **every** method, not just
+CREDIT/MIXED — so a cross-store customer returns 404 `customer_not_found`; the loaded `Customer` is reused by the
+credit-limit checks (no duplicate query). Payment-method rules:
+- `CASH` / `CARD` / `TRANSFER`: `amountPaid = total`, `amountCredited = 0`. Customer optional, but validated if supplied.
 - `CREDIT`: `customer_id` required (`customer_required`); enforces `outstandingBalance + total ≤ creditLimit`
   (`credit_limit_exceeded`). `amountPaid = 0`, `amountCredited = total`.
 - `MIXED`: `customer_id` required; `amount_paid` must satisfy `0 < amount_paid < total` strict
@@ -247,7 +260,8 @@ API — stations are seeded via SQL.
   whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth is the `X-Agent-Key` header compared
   **timing-safe** via `MessageDigest.isEqual(...)` (UTF-8 bytes) against `app.security.agent.api-key`
   (`AgentSecurityProperties`); null/mismatch throws `AccessDeniedException` (403 `forbidden`). Never `String.equals`
-  here (timing attack). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100)`). Returns 204. `StoreService
+  here (timing attack). Body `UpdateAgentUrlRequest` (`url` `@NotBlank @Size(max=100) @Pattern(regexp = "^https?://.*")`
+  — VULN-05 anti-stored-XSS: rejects `javascript:`/`data:` schemes → 400 `validation_failed`). Returns 204. `StoreService
   .updateAgentUrl(stationId, url)` loads the station by id and writes `agentUrl`. Unknown station → 404
   `station_not_found` (`NotFoundException.station(id)`).
 - **PWA read:** `GET /api/v1/stores/me/stations` (`StoreProfileController`, `OWNER`/`CASHIER`) — JWT-scoped via

@@ -6,7 +6,6 @@ import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
-import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.domain.UnitOfMeasure;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
@@ -63,8 +62,6 @@ class SaleServiceTest {
     @Mock
     private ProductRepository productRepository;
 
-    @Mock
-    private NotificationRepository notificationRepository;
 
     @InjectMocks
     private SaleService saleService;
@@ -273,6 +270,10 @@ class SaleServiceTest {
     void createSale_MixedPayment_AmountPaidGteTotal_ThrowsException() {
         given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
                 .willReturn(Optional.of(activeProduct(PRODUCT_ID)));
+        // Customer is now validated against the store before the split rule (VULN-01 hoist),
+        // so it must resolve in-tenant for the test to reach the invalid_mixed_payment path.
+        given(customerRepository.findByIdAndStoreId(CUSTOMER_ID, STORE_ID))
+                .willReturn(Optional.of(customer(new BigDecimal("0.00"), new BigDecimal("500.00"))));
 
         CreateSaleRequest request = new CreateSaleRequest(
                 SalePaymentMethod.MIXED,
@@ -289,7 +290,6 @@ class SaleServiceTest {
                     .hasFieldOrPropertyWithValue("code", "invalid_mixed_payment");
         }
 
-        verify(customerRepository, never()).findByIdAndStoreId(any(), any());
         verify(saleRepository, never()).save(any());
     }
 

@@ -87,17 +87,23 @@ public class SaleService {
         BigDecimal amountCredited;
         UUID customerId = request.customerId();
 
+        // Tenant scoping: any supplied customer MUST belong to the current store, regardless of
+        // payment method (VULN-01 IDOR fix). Loaded once and reused by the CREDIT/MIXED limit checks.
+        Customer customer = null;
+        if (customerId != null) {
+            customer = customerRepository.findByIdAndStoreId(customerId, storeId)
+                    .orElseThrow(() -> NotFoundException.customer(customerId));
+        }
+
         switch (method) {
             case CASH, CARD, TRANSFER -> {
                 amountPaid = total;
                 amountCredited = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
             }
             case CREDIT -> {
-                if (customerId == null) {
+                if (customer == null) {
                     throw InvalidResourceStateException.customerRequiredForCredit();
                 }
-                Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
-                        .orElseThrow(() -> NotFoundException.customer(customerId));
                 if (customer.getOutstandingBalance().add(total).compareTo(customer.getCreditLimit()) > 0) {
                     throw InvalidResourceStateException.creditLimitExceeded();
                 }
@@ -105,7 +111,7 @@ public class SaleService {
                 amountCredited = total;
             }
             case MIXED -> {
-                if (customerId == null) {
+                if (customer == null) {
                     throw InvalidResourceStateException.customerRequiredForCredit();
                 }
                 BigDecimal requested = request.amountPaid();
@@ -116,8 +122,6 @@ public class SaleService {
                 }
                 amountPaid = requested.setScale(2, RoundingMode.HALF_UP);
                 amountCredited = total.subtract(amountPaid);
-                Customer customer = customerRepository.findByIdAndStoreId(customerId, storeId)
-                        .orElseThrow(() -> NotFoundException.customer(customerId));
                 if (customer.getOutstandingBalance().add(amountCredited).compareTo(customer.getCreditLimit()) > 0) {
                     throw InvalidResourceStateException.creditLimitExceeded();
                 }

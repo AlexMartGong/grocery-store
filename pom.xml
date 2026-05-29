@@ -86,6 +86,15 @@
             <artifactId>aspectjweaver</artifactId>
         </dependency>
 
+        <!-- bucket4j (token-bucket rate limiting for the login endpoints — VULN-04 brute-force
+             mitigation). Boot 4 BOM does not manage bucket4j, so the version is pinned here.
+             Pure-Java, no jakarta deps; 8.12+ renamed the artifact to bucket4j_jdk17-core. -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
+        </dependency>
+
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
