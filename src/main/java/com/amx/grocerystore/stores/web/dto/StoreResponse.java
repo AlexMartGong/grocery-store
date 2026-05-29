@@ -1,5 +1,6 @@
 package com.amx.grocerystore.stores.web.dto;
 
+import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStatus;
 
@@ -12,6 +13,8 @@ public record StoreResponse(
         String name,
         String ownerName,
         String whatsapp,
+        String telegramChatId,
+        AdminNotificationChannel preferredAdminChannel,
         String address,
         StoreStatus status,
         OffsetDateTime createdAt
@@ -24,6 +27,8 @@ public record StoreResponse(
                 store.getName(),
                 store.getOwnerName(),
                 store.getWhatsapp(),
+                store.getTelegramChatId(),
+                store.getPreferredAdminChannel(),
                 store.getAddress(),
                 store.getStatus(),
                 store.getCreatedAt()

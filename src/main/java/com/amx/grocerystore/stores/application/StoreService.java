@@ -3,6 +3,7 @@ package com.amx.grocerystore.stores.application;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStation;
 import com.amx.grocerystore.stores.domain.StoreStationStatus;
@@ -40,6 +41,10 @@ public class StoreService {
                 .name(request.name())
                 .ownerName(request.ownerName())
                 .whatsapp(request.whatsapp())
+                .telegramChatId(request.telegramChatId())
+                .preferredAdminChannel(request.preferredAdminChannel() != null
+                        ? request.preferredAdminChannel()
+                        : AdminNotificationChannel.WHATSAPP)
                 .address(request.address())
                 .status(StoreStatus.ACTIVE)
                 .build();
@@ -75,6 +80,8 @@ public class StoreService {
         store.setName(request.name());
         store.setOwnerName(request.ownerName());
         store.setWhatsapp(request.whatsapp());
+        store.setTelegramChatId(request.telegramChatId());
+        store.setPreferredAdminChannel(request.preferredAdminChannel());
         store.setAddress(request.address());
         store.setStatus(request.status());
         return StoreResponse.from(storeRepository.save(store));

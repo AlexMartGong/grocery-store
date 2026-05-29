@@ -1,5 +1,6 @@
 package com.amx.grocerystore.stores.web.dto;
 
+import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.StoreStatus;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -15,6 +16,11 @@ public record UpdateStoreRequest(
 
         @Size(max = 20)
         String whatsapp,
+
+        @Size(max = 50)
+        String telegramChatId,
+
+        AdminNotificationChannel preferredAdminChannel,
 
         String address,
 
