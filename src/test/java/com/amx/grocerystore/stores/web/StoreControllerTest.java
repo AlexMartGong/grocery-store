@@ -76,7 +76,7 @@ class StoreControllerTest {
     }
 
     private StoreResponse sampleResponse(UUID id) {
-        return new StoreResponse(id, "tienda-demo", "Tienda", null, null, null,
+        return new StoreResponse(id, "tienda-demo", "Tienda", null, null, null, null, null,
                 StoreStatus.ACTIVE, OffsetDateTime.now());
     }
 
@@ -95,6 +95,32 @@ class StoreControllerTest {
                 .andExpect(header().string("Location", "/api/v1/stores/" + id))
                 .andExpect(jsonPath("$.id").value(id.toString()))
                 .andExpect(jsonPath("$.code").value("tienda-demo"));
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void post_withNotificationFields_returns201() throws Exception {
+        UUID id = UUID.randomUUID();
+        given(storeService.create(any())).willReturn(sampleResponse(id));
+
+        mvc.perform(post(URL).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"tienda-demo","name":"Tienda","telegramChatId":"123","preferredAdminChannel":"TELEGRAM"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(id.toString()));
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void post_invalidChannel_returns400() throws Exception {
+        mvc.perform(post(URL).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"tienda-demo","name":"Tienda","preferredAdminChannel":"SMS"}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

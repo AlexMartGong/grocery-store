@@ -3,6 +3,7 @@ package com.amx.grocerystore.stores.application;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStatus;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
@@ -51,7 +52,7 @@ class StoreServiceTest {
 
     @Test
     void create_savesWithActiveStatus_returnsResponse() {
-        CreateStoreRequest req = new CreateStoreRequest("tienda-demo", "Tienda Demo", null, null, null);
+        CreateStoreRequest req = new CreateStoreRequest("tienda-demo", "Tienda Demo", null, null, "123", null, null);
         given(storeRepository.existsByCode("tienda-demo")).willReturn(false);
         given(storeRepository.save(any(Store.class))).willAnswer(inv -> {
             Store s = inv.getArgument(0);
@@ -65,12 +66,15 @@ class StoreServiceTest {
         verify(storeRepository).save(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(StoreStatus.ACTIVE);
         assertThat(captor.getValue().getCode()).isEqualTo("tienda-demo");
+        assertThat(captor.getValue().getTelegramChatId()).isEqualTo("123");
+        assertThat(captor.getValue().getPreferredAdminChannel()).isEqualTo(AdminNotificationChannel.WHATSAPP);
         assertThat(response.status()).isEqualTo(StoreStatus.ACTIVE);
+        assertThat(response.preferredAdminChannel()).isEqualTo(AdminNotificationChannel.WHATSAPP);
     }
 
     @Test
     void create_whenCodeExists_throwsDuplicate() {
-        CreateStoreRequest req = new CreateStoreRequest("tienda-demo", "Tienda Demo", null, null, null);
+        CreateStoreRequest req = new CreateStoreRequest("tienda-demo", "Tienda Demo", null, null, null, null, null);
         given(storeRepository.existsByCode("tienda-demo")).willReturn(true);
 
         assertThatThrownBy(() -> storeService.create(req))
@@ -131,13 +135,16 @@ class StoreServiceTest {
         given(storeRepository.findById(id)).willReturn(Optional.of(existing));
         given(storeRepository.save(any(Store.class))).willAnswer(inv -> inv.getArgument(0));
 
-        UpdateStoreRequest req = new UpdateStoreRequest("Nuevo Nombre", "Dueno", "55512345", "Calle 1", StoreStatus.SUSPENDED);
+        UpdateStoreRequest req = new UpdateStoreRequest("Nuevo Nombre", "Dueno", "55512345", "999",
+                AdminNotificationChannel.TELEGRAM, "Calle 1", StoreStatus.SUSPENDED);
         StoreResponse response = storeService.update(id, req);
 
         assertThat(existing.getCode()).isEqualTo("tienda-demo");
         assertThat(response.name()).isEqualTo("Nuevo Nombre");
         assertThat(response.status()).isEqualTo(StoreStatus.SUSPENDED);
         assertThat(response.ownerName()).isEqualTo("Dueno");
+        assertThat(response.telegramChatId()).isEqualTo("999");
+        assertThat(response.preferredAdminChannel()).isEqualTo(AdminNotificationChannel.TELEGRAM);
     }
 
     @Test
