@@ -49,4 +49,9 @@ public class NotFoundException extends RuntimeException {
     public static NotFoundException station(UUID id) {
         return new NotFoundException("station_not_found", "Store station not found: " + id);
     }
+
+    public static NotFoundException subscription(UUID storeId) {
+        return new NotFoundException("subscription_not_found",
+                "Active subscription not found for store: " + storeId);
+    }
 }

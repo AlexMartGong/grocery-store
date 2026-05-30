@@ -105,6 +105,20 @@ public class StoreService {
     }
 
     @Transactional
+    public void suspend(UUID storeId) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        store.setStatus(StoreStatus.SUSPENDED);
+    }
+
+    @Transactional
+    public void activate(UUID storeId) {
+        Store store = storeRepository.findById(storeId)
+                .orElseThrow(() -> NotFoundException.store(storeId));
+        store.setStatus(StoreStatus.ACTIVE);
+    }
+
+    @Transactional
     public void softDelete(UUID id) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> NotFoundException.store(id));
