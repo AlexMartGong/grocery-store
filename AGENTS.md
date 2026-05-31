@@ -203,6 +203,13 @@ reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative
 `conflict`. `InventoryReason` enum colocated in `inventory.domain`. After save, when `reason == LOSS`, publishes
 `InventoryLossEvent(productName, quantity, notes)` via `ApplicationEventPublisher` for the shrinkage alert.
 
+**Inventory movement history (Kárdex):** `GET /api/v1/inventory/movements?productId={id}` (`OWNER`/`CASHIER`) —
+paginated read of one product's movement ledger, tenant-scoped via `SecurityUtils.currentStoreId()`, ordered
+`created_at DESC` (`InventoryMovementRepository.findByStoreIdAndProductIdOrderByCreatedAtDesc`). Returns
+`PageResponse<InventoryMovementResponse>` (`id`, `productId`, `quantity`, `reason`, `notes`, `createdAt`). **No search**
+(deliberate — simple list, unlike stores/products/customers). `productId` is a required `@RequestParam` (missing → 400).
+Store scoping makes a foreign-store `productId` return an empty page (never 404 — never probes existence).
+
 **Cash register shift endpoints:** `POST /api/v1/cash/shifts/open` (`OWNER`/`CASHIER`) — opens a shift via
 `OpenShiftRequest` (`opening_balance` `@PositiveOrZero`). Returns 201 + `CashShiftResponse`. Fails with 409
 `shift_already_open` if a shift is already `OPEN` for the store.
