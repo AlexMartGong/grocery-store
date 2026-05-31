@@ -604,3 +604,26 @@ CREATE INDEX idx_sale_items_product ON sale_items(product_id);
 -- Enforce the no-oversell contract at the engine: a sale driving stock < 0
 -- now raises a CHECK violation (-> DataIntegrityViolationException -> 409 conflict).
 ALTER TABLE products ADD CONSTRAINT chk_positive_stock CHECK (current_stock >= 0);
+
+
+-- =====================================================================
+-- MODULE 5: AUDIT LOGS
+-- =====================================================================
+-- General audit trail for critical admin actions. Rows are written by Java
+-- (no triggers): a domain event is published after persistence and an
+-- @Async @EventListener inserts here. store_id/user_id are cross-module FKs
+-- (plain UUID columns). details is JSONB (mapped via @JdbcTypeCode(SqlTypes.JSON)).
+CREATE TABLE audit_logs
+(
+    id          UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
+    store_id    UUID        NOT NULL REFERENCES stores (id) ON DELETE RESTRICT,
+    user_id     UUID                 REFERENCES users (id) ON DELETE SET NULL,
+    action      VARCHAR(50) NOT NULL,
+    entity_type VARCHAR(50) NOT NULL,
+    entity_id   UUID,
+    details     JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Store-scoped, newest-first audit history scans.
+CREATE INDEX idx_audit_logs_store_date ON audit_logs (store_id, created_at DESC);

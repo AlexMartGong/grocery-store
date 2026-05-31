@@ -5,16 +5,19 @@ import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.products.domain.Product;
+import com.amx.grocerystore.products.domain.events.ProductPriceChangedEvent;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
 import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Service
@@ -22,6 +25,7 @@ import java.util.UUID;
 public class ProductService {
 
     private final ProductRepository productRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ProductResponse create(ProductRequest request) {
@@ -97,13 +101,22 @@ public class ProductService {
         UUID storeId = SecurityUtils.currentStoreId();
         Product product = productRepository.findByIdAndStoreIdAndActiveTrue(id, storeId)
                 .orElseThrow(() -> NotFoundException.product(id));
+        BigDecimal oldSalePrice = product.getSalePrice();
+        boolean salePriceChanged = request.salePrice() != null
+                && request.salePrice().compareTo(oldSalePrice) != 0;
         if (request.salePrice() != null) {
             product.setSalePrice(request.salePrice());
         }
         if (request.purchaseCost() != null) {
             product.setPurchaseCost(request.purchaseCost());
         }
-        return ProductResponse.from(productRepository.save(product));
+        Product saved = productRepository.save(product);
+        if (salePriceChanged) {
+            eventPublisher.publishEvent(new ProductPriceChangedEvent(
+                    storeId, SecurityUtils.currentUserId(), saved.getId(),
+                    oldSalePrice, saved.getSalePrice()));
+        }
+        return ProductResponse.from(saved);
     }
 
     @Transactional(readOnly = true)

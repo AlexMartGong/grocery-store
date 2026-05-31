@@ -7,9 +7,11 @@ import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.domain.UnitOfMeasure;
+import com.amx.grocerystore.products.domain.events.ProductPriceChangedEvent;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
+import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
 import com.amx.grocerystore.users.domain.UserRole;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -45,6 +48,9 @@ class ProductServiceTest {
 
     @Mock
     private ProductRepository productRepository;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private ProductService productService;
@@ -304,5 +310,58 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.findByBarcode("MISS"))
                 .isInstanceOf(NotFoundException.class)
                 .extracting("code").isEqualTo("product_not_found");
+    }
+
+    @Test
+    void updatePrices_salePriceChanged_publishesProductPriceChangedEvent() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true); // salePrice 20.00
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+
+        UpdateProductPricesRequest req =
+                new UpdateProductPricesRequest(new BigDecimal("24.50"), null);
+        productService.updatePrices(id, req);
+
+        ArgumentCaptor<ProductPriceChangedEvent> captor =
+                ArgumentCaptor.forClass(ProductPriceChangedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        ProductPriceChangedEvent event = captor.getValue();
+        assertThat(event.storeId()).isEqualTo(TENANT_ID);
+        assertThat(event.productId()).isEqualTo(id);
+        assertThat(event.oldPrice()).isEqualByComparingTo("20.00");
+        assertThat(event.newPrice()).isEqualByComparingTo("24.50");
+    }
+
+    @Test
+    void updatePrices_purchaseCostOnly_doesNotPublishEvent() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true); // salePrice 20.00
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+
+        UpdateProductPricesRequest req =
+                new UpdateProductPricesRequest(null, new BigDecimal("18.00"));
+        productService.updatePrices(id, req);
+
+        assertThat(existing.getPurchaseCost()).isEqualByComparingTo("18.00");
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void updatePrices_salePriceUnchanged_doesNotPublishEvent() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true); // salePrice 20.00
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+
+        UpdateProductPricesRequest req =
+                new UpdateProductPricesRequest(new BigDecimal("20.00"), null);
+        productService.updatePrices(id, req);
+
+        verify(eventPublisher, never()).publishEvent(any());
     }
 }

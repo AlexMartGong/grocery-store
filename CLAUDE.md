@@ -41,11 +41,12 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 |`inventory`|`InventoryMovement`|
 |`cash`|`CashRegisterShift`|
 |`notifications`|`Notification`|
+|`audit`|`AuditLog`|
 
 ### FK Strategy (bounded-context friendly)
 
 - **Same module (same aggregate):** `@ManyToOne(fetch = LAZY)` with `@JoinColumn`. Examples: `SaleItem.sale`, `CustomerPayment.customer`, `Subscription.plan`, `SaleCancellation.sale` (`@OneToOne` via UNIQUE), `StoreStation.store`.
-- **Cross-module FKs:** plain `UUID` field, no JPA association. Examples: `storeId`, `userId`, `productId`, `customerId`, `saleId`, `canceledBy`, `referenceId`. Resolve via repositories.
+- **Cross-module FKs:** plain `UUID` field, no JPA association. Examples: `storeId`, `userId`, `productId`, `customerId`, `saleId`, `canceledBy`, `referenceId`, `AuditLog.storeId`/`userId`/`entityId`. Resolve via repositories.
 
 ### Auth Architecture
 
@@ -112,7 +113,8 @@ CRUD endpoints share shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (pagin
 ### Endpoint Contracts (one-line — see controller/service for details)
 
 - **`GET /api/v1/products/search?barcode={barcode}`** (`ProductController`) — active barcode lookup, current-store scope; `product_not_found` if missing/inactive.
-- **`PATCH /api/v1/products/{id}/price`** (`OWNER`) — partial price update via `UpdateProductPricesRequest`; both fields `@PositiveOrZero` and optional; only non-null fields written.
+- **`PATCH /api/v1/products/{id}/price`** (`OWNER`) — partial price update via `UpdateProductPricesRequest`; both fields `@PositiveOrZero` and optional; only non-null fields written. When the **sale price actually changes** (`salePrice` non-null and `compareTo` differs), publishes `ProductPriceChangedEvent` after save → audit trail (see Audit Module). Purchase-cost-only/no-op edits do not emit.
+- **`GET /api/v1/audit-logs`** (`AuditLogController`, `OWNER`, `@PageableDefault(size = 20)`) — paginated audit history for the current store (`SecurityUtils.currentStoreId()`), `created_at DESC` (`AuditLogRepository.findByStoreIdOrderByCreatedAtDesc`). `AuditLogService` builds an in-memory `userId → fullName` map from `UserRepository.findByStoreId(storeId)`; `AuditLogResponse.userName` → `"Sistema"` when `userId` is null or unresolved. Returns `PageResponse<AuditLogResponse>` (see Audit Module).
 - **`POST /api/v1/admin/stores/{storeId}/users`** (`AdminUserProvisioningController`, `SUPER_ADMIN`) — bootstraps the initial `OWNER`. Calls `UserService.provisionUserForStore`; enforces store active, `role == OWNER`, no existing active owner, username free.
 - **`POST /api/v1/customers/{id}/payments`** (`OWNER`/`CASHIER`) — credit repayment. Trigger `fn_apply_payment` decrements `customers.outstanding_balance` AFTER INSERT — service never mutates balance directly. Publishes `CustomerPaymentEvent`.
 - **`POST /api/v1/inventory/movements`** (`OWNER`/`CASHIER`) — `AdjustStockRequest`. `quantity` is a **signed ledger delta** (positive = in, negative = out). Rejects `SALE`/`CANCELLATION` reasons (`reason_not_allowed`) — those are trigger-owned. Allowed: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Negative stock → 409 `conflict` (DB CHECK). On `LOSS`, publishes `InventoryLossEvent`.
@@ -149,8 +151,9 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 |`LowStockEvent`|`SaleService.createSale` (parsed from `notifications` rows post-sale)|store admin channel (`event.storeId()`)|
 |`SaleCancelledEvent`|`SaleService.cancelSale`|store admin channel (anti-fraud)|
 |`InventoryLossEvent`|`InventoryService.adjustStock` when `reason == LOSS`|store admin channel (shrinkage)|
+|`ProductPriceChangedEvent`|`ProductService.updatePrices` when sale price changes|`audit_logs` row via `AuditEventListener` (DB, not a notification channel)|
 
-**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` are `@Async`. **Backpressure (mandatory):** the executor uses `CallerRunsPolicy` — a saturated queue makes the **calling thread** run the task inline (added latency, never a `RejectedExecutionException`/500 for the cashier), never `AbortPolicy`. **Graceful shutdown:** `setWaitForTasksToCompleteOnShutdown(true)` + `setAwaitTerminationSeconds(30)` so queued notifications drain (≤30s) on restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication` (enables `@Retryable` on `SaleService` — see Sales endpoint).
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with `ThreadPoolTaskExecutor` (core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` — plus `audit.application.AuditEventListener` — are `@Async`. **Backpressure (mandatory):** the executor uses `CallerRunsPolicy` — a saturated queue makes the **calling thread** run the task inline (added latency, never a `RejectedExecutionException`/500 for the cashier), never `AbortPolicy`. **Graceful shutdown:** `setWaitForTasksToCompleteOnShutdown(true)` + `setAwaitTerminationSeconds(30)` so queued notifications drain (≤30s) on restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication` (enables `@Retryable` on `SaleService` — see Sales endpoint).
 
 **HTTP client rule (mandatory):** every outbound `RestClient` **MUST** be built on a `SimpleClientHttpRequestFactory` with strict `connectTimeout` 5s + `readTimeout` 10s (`Duration` setters). A timeout-less HTTP client is **prohibited** — a frozen upstream must never pin a request or `@Async` thread indefinitely. `EvolutionWhatsAppClient` and `TelegramBotClient` already comply; any new client follows the same contract.
 
@@ -161,6 +164,16 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 `onInventoryLoss` uses `event.quantity().abs()` for display — `InventoryMovement.quantity` is a signed ledger delta (LOSS rows are negative); ledger keeps the sign, the WhatsApp message shows magnitude.
 
 **When adding a new notification:** define event record under `<source-module>.domain.events`, publish from the service **after** persistence, add `@Async @EventListener` method on `AdminNotificationEventListener` (or a new listener). For owner-facing alerts, include `UUID storeId` on the event and route via `sendAdminAlert(event.storeId(), text)` (channel-aware) — never a static phone. For customer-facing alerts, call `EvolutionWhatsAppClient.sendMessage(phone, text)` directly. **Do not** add HTTP error handling at the listener layer — the client owns failure isolation.
+
+### Audit Module
+
+General audit trail for critical admin actions. `audit` module, one aggregate `AuditLog` (`audit.domain`). Rows are **written by Java, not triggers**: a domain event is published after persistence and an `@Async @EventListener` inserts the row.
+
+**Schema:** `audit_logs` (`script.sql` MODULE 5) — `id`, `store_id` (FK `stores`, `ON DELETE RESTRICT`), `user_id` (FK `users`, **nullable**, `ON DELETE SET NULL`), `action VARCHAR(50)`, `entity_type VARCHAR(50)`, `entity_id UUID`, `details JSONB`, `created_at TIMESTAMPTZ DEFAULT NOW()`. Index `idx_audit_logs_store_date (store_id, created_at DESC)`. **First and only JSONB column in the schema** — `AuditLog.details` is `Map<String, Object>` mapped via `@JdbcTypeCode(SqlTypes.JSON)` + `@Column(columnDefinition = "jsonb")` (Hibernate 6; the pattern for any future JSONB). `store_id`/`user_id`/`entity_id` are cross-module FKs → plain `UUID` (no JPA association). `created_at` is DB-owned (`insertable = false, updatable = false`, no `@PrePersist`).
+
+**Write path:** `AuditEventListener` (`audit.application`, `@Component @RequiredArgsConstructor`, `@Async @EventListener`) consumes `ProductPriceChangedEvent` and saves an `AuditLog` (`action = "PRICE_CHANGED"`, `entityType = "PRODUCT"`, `entityId = productId`, `details = {oldPrice, newPrice}`). The **producing service captures `userId` via `SecurityUtils.currentUserId()` before publishing** — the `@Async` thread has no `SecurityContext`, so never call `SecurityUtils` inside the listener. Add new audited actions by publishing a new event (with `storeId` + `userId`) and adding a handler here.
+
+**Read path:** `GET /api/v1/audit-logs` (`AuditLogController`, `OWNER`) → `AuditLogService.getStoreAuditLogs(Pageable)` — tenant-scoped via `currentStoreId()`, `AuditLogRepository.findByStoreIdOrderByCreatedAtDesc`. Resolves `userName` by building an in-memory `userId → fullName` map from `UserRepository.findByStoreId(storeId)` (cross-module read; loads all store users — fine for the low-volume `users` module); `null`/unresolved `userId` → `"Sistema"`. Returns `PageResponse<AuditLogResponse>` (`id`, `userId`, `userName`, `action`, `entityType`, `entityId`, `details`, `createdAt`) — entity never exposed.
 
 ## SOLID Principles
 
@@ -179,7 +192,7 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 - **Validation:** Bean Validation on all DTOs and entities.
 - **Entity conventions:**
   - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety net.
-  - Types: `TIMESTAMPTZ` → `OffsetDateTime`, `DATE` → `LocalDate`, `NUMERIC(10,2)` → `BigDecimal`.
+  - Types: `TIMESTAMPTZ` → `OffsetDateTime`, `DATE` → `LocalDate`, `NUMERIC(10,2)` → `BigDecimal`, `JSONB` → `Map<String, Object>` with `@JdbcTypeCode(SqlTypes.JSON)` + `@Column(columnDefinition = "jsonb")` (see `AuditLog.details`).
   - DB-filled timestamps (`created_at`, `updated_at`, `paid_at`): `@Column(insertable = false, updatable = false)`. **Do not** add `@PrePersist` — triggers/defaults own this.
   - Enums: one Java `enum` per CHECK constraint, `@Enumerated(EnumType.STRING)`, colocated in the same `domain` package.
 - **Best practices:** prioritize patterns in `.claude/skills/java-springboot/SKILL.md`.
