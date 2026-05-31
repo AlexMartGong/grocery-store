@@ -42,6 +42,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 |`cash`|`CashRegisterShift`|
 |`notifications`|`Notification`|
 |`audit`|`AuditLog`|
+|`dashboard`|`SalesTodayView`, `ProductToRestockView` (read-only `@Immutable` views — no aggregate)|
 
 ### FK Strategy (bounded-context friendly)
 
@@ -119,6 +120,8 @@ CRUD endpoints share shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (pagin
 - **`POST /api/v1/customers/{id}/payments`** (`OWNER`/`CASHIER`) — credit repayment. Trigger `fn_apply_payment` decrements `customers.outstanding_balance` AFTER INSERT — service never mutates balance directly. Publishes `CustomerPaymentEvent`.
 - **`POST /api/v1/inventory/movements`** (`OWNER`/`CASHIER`) — `AdjustStockRequest`. `quantity` is a **signed ledger delta** (positive = in, negative = out). Rejects `SALE`/`CANCELLATION` reasons (`reason_not_allowed`) — those are trigger-owned. Allowed: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Negative stock → 409 `conflict` (DB CHECK). On `LOSS`, publishes `InventoryLossEvent`.
 - **`GET /api/v1/inventory/movements?productId={id}`** (`OWNER`/`CASHIER`) — paginated **Kárdex** (movement history) for one product, tenant-scoped via `SecurityUtils.currentStoreId()`, `created_at DESC` (`InventoryMovementRepository.findByStoreIdAndProductIdOrderByCreatedAtDesc`). Returns `PageResponse<InventoryMovementResponse>` (`id`, `productId`, `quantity`, `reason`, `notes`, `createdAt`). **No search** (deliberate — simple list). `productId` is a **required** `@RequestParam` (missing → 400). Foreign-store `productId` → empty page (store scoping, never 404).
+- **`GET /api/v1/dashboard/sales-today`** (`DashboardController`, `OWNER`) — day-of-sales summary for the current store (`SecurityUtils.currentStoreId()`), reads `v_sales_today` via `SalesTodayViewRepository.findById(storeId)`. Returns `SalesTodayResponse` (`tickets`, `dayTotal`, `dayCollected`, `dayOnCredit`). **No view row (no completed sales yet today) → zero DTO** (`SalesTodayResponse.empty()`: `0` + `BigDecimal.ZERO`), never 404 (see Dashboard Module).
+- **`GET /api/v1/dashboard/products-to-restock`** (`DashboardController`, `OWNER`, `@PageableDefault`) — paginated restock list for the current store, reads `v_products_to_restock` via `ProductToRestockViewRepository.findByStoreId(storeId, pageable)` (view orders by `current_stock`). Returns `PageResponse<ProductToRestockResponse>` (`productId`, `name`, `currentStock`, `minimumStock`). Foreign-store rows never surface (store-scoped query).
 - **`POST /api/v1/cash/shifts/open`** (`OWNER`/`CASHIER`) — `shift_already_open` if open shift exists.
 - **`GET /api/v1/cash/shifts/current`** (`OWNER`/`CASHIER`) — or `open_shift_not_found`.
 - **`POST /api/v1/cash/shifts/current/close`** (`OWNER`/`CASHIER`) — computed `expected_balance = opening + cashSales + cashPayments` (windowed `opened_at`→close), `difference = real − expected`. `cashSales` = Σ `amount_paid` for `CASH`/`MIXED` `COMPLETED` sales; `cashPayments` = Σ `customer_payments.amount`. Publishes `ShiftClosedEvent`.
@@ -175,6 +178,14 @@ General audit trail for critical admin actions. `audit` module, one aggregate `A
 **Write path:** `AuditEventListener` (`audit.application`, `@Component @RequiredArgsConstructor`, `@Async @EventListener`) consumes `ProductPriceChangedEvent` and saves an `AuditLog` (`action = "PRICE_CHANGED"`, `entityType = "PRODUCT"`, `entityId = productId`, `details = {oldPrice, newPrice}`). The **producing service captures `userId` via `SecurityUtils.currentUserId()` before publishing** — the `@Async` thread has no `SecurityContext`, so never call `SecurityUtils` inside the listener. Add new audited actions by publishing a new event (with `storeId` + `userId`) and adding a handler here.
 
 **Read path:** `GET /api/v1/audit-logs` (`AuditLogController`, `OWNER`) → `AuditLogService.getStoreAuditLogs(Pageable)` — tenant-scoped via `currentStoreId()`, `AuditLogRepository.findByStoreIdOrderByCreatedAtDesc`. Resolves `userName` by building an in-memory `userId → fullName` map from `UserRepository.findByStoreId(storeId)` (cross-module read; loads all store users — fine for the low-volume `users` module); `null`/unresolved `userId` → `"Sistema"`. Returns `PageResponse<AuditLogResponse>` (`id`, `userId`, `userName`, `action`, `entityType`, `entityId`, `details`, `createdAt`) — entity never exposed.
+
+### Dashboard Module
+
+Read-only analytics over existing PostgreSQL views — **no aggregate, no writes**. `dashboard` module, two view entities in `dashboard.domain`: `SalesTodayView` (maps `v_sales_today`, `@Id storeId`) and `ProductToRestockView` (maps `v_products_to_restock`, `@Id productId`). Both annotated `@Entity @Immutable @Table(name = "v_…")` + Lombok `@Getter @NoArgsConstructor` only — `@Immutable` (Hibernate) disables dirty-checking on these never-written rows (the convention for any future read-model view). Under `ddl-auto=validate`, view columns must match the entity mapping exactly (PostgreSQL exposes views as tables to JDBC metadata, so validation passes).
+
+**Repositories** (`dashboard.infrastructure`) extend the minimal `org.springframework.data.repository.Repository` (read-only surface, not `JpaRepository`): `SalesTodayViewRepository.findById(UUID storeId)` → `Optional`, `ProductToRestockViewRepository.findByStoreId(UUID storeId, Pageable)` → `Page`.
+
+**Service/Web:** `DashboardService` (`@Transactional(readOnly = true)`, tenant-scoped via `SecurityUtils.currentStoreId()` — never trust client `storeId`). `getSalesToday()` maps the view or falls back to `SalesTodayResponse.empty()` (`0` + `BigDecimal.ZERO`) when no row exists (start of day, no completed sales) — **never 404/exception**. `getProductsToRestock(Pageable)` → `PageResponse.from(page.map(ProductToRestockResponse::from))`. `DashboardController` (`/api/v1/dashboard`, both endpoints `@PreAuthorize("hasRole('OWNER')")`): `GET /sales-today` → `SalesTodayResponse`; `GET /products-to-restock` (`@PageableDefault`) → `PageResponse<ProductToRestockResponse>`. View entities never exposed — records only.
 
 ## SOLID Principles
 

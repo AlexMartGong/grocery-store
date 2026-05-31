@@ -53,6 +53,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 | `cash` | `CashRegisterShift` |
 | `notifications` | `Notification` |
 | `audit` | `AuditLog` |
+| `dashboard` | `SalesTodayView`, `ProductToRestockView` (read-only `@Immutable` views — no aggregate) |
 
 ### Auth Architecture
 
@@ -209,6 +210,23 @@ paginated read of one product's movement ledger, tenant-scoped via `SecurityUtil
 `PageResponse<InventoryMovementResponse>` (`id`, `productId`, `quantity`, `reason`, `notes`, `createdAt`). **No search**
 (deliberate — simple list, unlike stores/products/customers). `productId` is a required `@RequestParam` (missing → 400).
 Store scoping makes a foreign-store `productId` return an empty page (never 404 — never probes existence).
+
+**Dashboard analytics (`dashboard` module):** read-only metrics over existing PostgreSQL views — no aggregate, no writes.
+View entities in `dashboard.domain` map the views one-to-one: `SalesTodayView` (`v_sales_today`, `@Id storeId`) and
+`ProductToRestockView` (`v_products_to_restock`, `@Id productId`). Both are `@Entity @Immutable @Table(name = "v_…")` +
+Lombok `@Getter @NoArgsConstructor` only — Hibernate `@Immutable` disables dirty-checking on never-written rows (the
+convention for any future read-model view). Under `ddl-auto=validate`, columns must match the mapping exactly (PostgreSQL
+exposes views as tables to JDBC metadata, so validation passes). Repositories (`dashboard.infrastructure`) extend the
+minimal `org.springframework.data.repository.Repository` (read-only surface, not `JpaRepository`):
+`SalesTodayViewRepository.findById(UUID storeId)` → `Optional`, `ProductToRestockViewRepository.findByStoreId(UUID
+storeId, Pageable)` → `Page`. `DashboardService` is `@Transactional(readOnly = true)`, tenant-scoped via
+`SecurityUtils.currentStoreId()` (never trust client `storeId`).
+`GET /api/v1/dashboard/sales-today` (`DashboardController`, `OWNER`) → `SalesTodayResponse` (`tickets`, `dayTotal`,
+`dayCollected`, `dayOnCredit`); when no view row exists (start of day, no completed sales) it returns
+`SalesTodayResponse.empty()` (`0` + `BigDecimal.ZERO`) — **never 404 or an exception**.
+`GET /api/v1/dashboard/products-to-restock` (`OWNER`, `@PageableDefault`) → `PageResponse<ProductToRestockResponse>`
+(`productId`, `name`, `currentStock`, `minimumStock`; view orders by `current_stock`). View entities never exposed —
+records only.
 
 **Cash register shift endpoints:** `POST /api/v1/cash/shifts/open` (`OWNER`/`CASHIER`) — opens a shift via
 `OpenShiftRequest` (`opening_balance` `@PositiveOrZero`). Returns 201 + `CashShiftResponse`. Fails with 409
