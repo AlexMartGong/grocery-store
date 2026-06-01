@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
 
@@ -40,8 +41,13 @@ public class TelegramBotClient {
                     .body(new TelegramMessageRequest(chatId, text))
                     .retrieve()
                     .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            // 4xx/5xx from Bot API — body carries the real reason (bad chat_id, token, blocked bot).
+            log.error("Telegram API HTTP {} chatId={} body={}",
+                    e.getStatusCode(), chatId, e.getResponseBodyAsString());
         } catch (Exception e) {
-            log.error("Telegram API send failed chatId={} err={}", chatId, e.getMessage());
+            // Timeouts (ResourceAccessException) and the rest — log full stacktrace, still swallow.
+            log.error("Telegram API send failed chatId={}", chatId, e);
         }
     }
 }

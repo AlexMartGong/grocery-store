@@ -314,18 +314,22 @@ keep new publishers transactional too. Current publishers:
 - `InventoryService.adjustStock` → `InventoryLossEvent(productName, quantity, notes)` only when `reason == LOSS`.
 - `ProductService.updatePrices` → `ProductPriceChangedEvent(storeId, userId, productId, oldPrice, newPrice)` only when the sale price changes. **Not** a notification — consumed by `audit.application.AuditEventListener`, which writes an `audit_logs` row (see Audit Module).
 
-**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` and exposes the `taskExecutor` bean as a
-**virtual-thread** `SimpleAsyncTaskExecutor` (`setVirtualThreads(true)`, prefix `async-`) — Java 21 virtual threads make
-the blocking 10s HTTP sends cheap, so bursts of low-stock/payment events never starve a fixed pool. All handlers in
-`notifications.application.*` — plus `audit.application.AuditEventListener` — are
-`@Async @TransactionalEventListener(AFTER_COMMIT)`: dispatch is deferred to commit and runs on a virtual thread, so
-publication never blocks the request thread and never fires for an uncommitted tx. Keep the bean **named `taskExecutor`**
-(the default `@Async` qualifier — renaming breaks resolution). **Backpressure (mandatory):** `setConcurrencyLimit(200)`
-caps in-flight tasks via a semaphore throttle — at the cap the submitting thread **blocks** until a slot frees (never a
-`RejectedExecutionException`/500 for the cashier); because dispatch is post-commit the block never holds a DB
-tx/connection open. **Graceful shutdown:** `setTaskTerminationTimeout(30_000)` lets active sends drain (≤30s) on restart
-instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication`, enabling the
-`@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` and exposes **two** **virtual-thread**
+`SimpleAsyncTaskExecutor` beans (`setVirtualThreads(true)`) — Java 21 virtual threads make the blocking ≤15s HTTP sends
+cheap. (1) `taskExecutor` (prefix `async-`) is the default `@Async` qualifier — keep this name (renaming breaks default
+resolution); used by `audit.application.AuditEventListener`. (2) `notificationExecutor` (prefix `notif-`) is **dedicated**
+to the notification handlers: every method on `AdminNotificationEventListener` (`notifications.application.*`) is
+`@Async("notificationExecutor") @TransactionalEventListener(AFTER_COMMIT)` — dispatch deferred to commit, run on a
+virtual thread, so publication never blocks the request thread and never fires for an uncommitted tx. **Isolation
+rationale (mandatory):** each send blocks up to ~15s on a slow WhatsApp/Telegram gateway; a separate pool keeps a
+notification burst (e.g. low-stock alerts per sale) from starving other `@Async` work (audit writes) or pinning the
+committing request thread behind the shared throttle. Route new notification listeners through `notificationExecutor`.
+**Backpressure (mandatory):** each bean sets `setConcurrencyLimit(200)` — a semaphore throttle that, at the cap,
+**blocks** the submitting thread until a slot frees (never a `RejectedExecutionException`/500 for the cashier); because
+dispatch is post-commit the block never holds a DB tx/connection open. Widen the notification limit only when the gateway
+is healthy — never to mask a slow upstream. **Graceful shutdown:** `setTaskTerminationTimeout(30_000)` (both beans) lets
+active sends drain (≤30s) on restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on
+`GroceryStoreApplication`, enabling the `@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
 
 **HTTP client rule (mandatory):** every outbound `RestClient` **MUST** be built on a `SimpleClientHttpRequestFactory`
 with strict `connectTimeout` 5s + `readTimeout` 10s (`Duration` setters). A timeout-less HTTP client is **prohibited** —
@@ -338,9 +342,11 @@ a frozen upstream must never pin a request or `@Async` thread indefinitely. `Evo
   `notifications.infrastructure.dto`).
 - **Timeouts mandatory:** the `RestClient` is built with a `SimpleClientHttpRequestFactory` (connect 5s, read 10s via
   `Duration` setters) so a frozen gateway can't pin `@Async` threads indefinitely.
-- The HTTP call is wrapped in `try-catch(Exception)` + `log.error` — gateway downtime, 4xx/5xx, and timeouts
-  (`ResourceAccessException`, a `RuntimeException`) are swallowed by design so `@Async` threads never propagate
-  stacktraces. Notifications are best-effort; the domain has already committed.
+- The HTTP call is wrapped in a **two-arm catch**: `catch(RestClientResponseException)` logs gateway status + response
+  body (surfaces bad number/instance/apikey), `catch(Exception)` logs the full stacktrace via `log.error(..., e)`
+  (surfaces `ResourceAccessException` timeouts). Both are swallowed by design so `@Async` threads never propagate. Pass
+  the exception object, never `e.getMessage()`, so the cause is preserved. Notifications are best-effort; the domain has
+  already committed.
 - Phone normalization: strip spaces, then prefix `52` only when the input is exactly 10 digits (Mexican local → E.164).
   `null` phone → log warn + return.
 - Configuration (`application.properties`):
@@ -355,8 +361,9 @@ a frozen upstream must never pin a request or `@Async` thread indefinitely. `Evo
   with JSON `TelegramMessageRequest(@JsonProperty("chat_id") chatId, text)` (DTO under `notifications.infrastructure.dto`).
 - Token injected via an **explicit constructor** with `@Value("${telegram.bot.token:}")` — **not**
   `@RequiredArgsConstructor` — to avoid the Lombok/`@Value` generated-constructor clash.
-- Same failure-isolation contract: `try-catch(Exception)` + `log.error`; empty token or empty `chatId` → `log.warn` +
-  return (no-op). Body is strictly `chat_id` + `text` (no `parse_mode`).
+- Same failure-isolation contract: two-arm catch (`RestClientResponseException` → status + body, `Exception` → full
+  stacktrace via `log.error(..., e)`), all swallowed; empty token or empty `chatId` → `log.warn` + return (no-op). Body is
+  strictly `chat_id` + `text` (no `parse_mode`).
 - Configuration: `telegram.bot.token` ← env `TELEGRAM_BOT_TOKEN` (default empty).
 
 **Per-tenant, per-channel owner routing.** Every owner-facing event carries `UUID storeId` as its first component;

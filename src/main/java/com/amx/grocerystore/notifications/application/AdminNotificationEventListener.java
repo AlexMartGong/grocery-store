@@ -52,7 +52,7 @@ public class AdminNotificationEventListener {
         }
     }
 
-    @Async
+    @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onShiftClosed(ShiftClosedEvent event) {
         CashShiftResponse shift = event.shift();
@@ -65,7 +65,7 @@ public class AdminNotificationEventListener {
         sendAdminAlert(event.storeId(), text);
     }
 
-    @Async
+    @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCustomerPayment(CustomerPaymentEvent event) {
         BigDecimal newBalance = customerRepository.findById(event.payment().customerId())
@@ -81,7 +81,7 @@ public class AdminNotificationEventListener {
         whatsappClient.sendMessage(event.customerPhone(), text);
     }
 
-    @Async
+    @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onLowStock(LowStockEvent event) {
         String text = String.format(
@@ -93,7 +93,7 @@ public class AdminNotificationEventListener {
         sendAdminAlert(event.storeId(), text);
     }
 
-    @Async
+    @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSaleCancelled(SaleCancelledEvent event) {
         String text = "🚨 *ALERTA ANTI-FRAUDE* 🚨\n"
@@ -113,7 +113,7 @@ public class AdminNotificationEventListener {
         };
     }
 
-    @Async
+    @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onInventoryLoss(InventoryLossEvent event) {
         String text = "⚠️ *MERMA DE INVENTARIO* ⚠️\n"

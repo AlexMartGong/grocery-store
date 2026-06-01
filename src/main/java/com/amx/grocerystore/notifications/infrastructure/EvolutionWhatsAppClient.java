@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
 
@@ -49,8 +50,13 @@ public class EvolutionWhatsAppClient {
                     .body(new EvolutionMessageRequest(normalized, text))
                     .retrieve()
                     .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            // 4xx/5xx from the gateway — body carries the real reason (bad number, instance, apikey).
+            log.error("Evolution API HTTP {} phone={} body={}",
+                    e.getStatusCode(), normalized, e.getResponseBodyAsString());
         } catch (Exception e) {
-            log.error("Evolution API send failed phone={} err={}", normalized, e.getMessage());
+            // Timeouts (ResourceAccessException) and the rest — log full stacktrace, still swallow.
+            log.error("Evolution API send failed phone={}", normalized, e);
         }
     }
 }
