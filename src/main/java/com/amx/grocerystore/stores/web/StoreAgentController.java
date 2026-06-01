@@ -1,7 +1,8 @@
 package com.amx.grocerystore.stores.web;
 
 import com.amx.grocerystore.core.security.AgentSecurityProperties;
-import com.amx.grocerystore.stores.application.StoreService;
+import com.amx.grocerystore.stores.application.AgentUpdateService;
+import com.amx.grocerystore.stores.web.dto.AgentUpdateResponse;
 import com.amx.grocerystore.stores.web.dto.UpdateAgentUrlRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,11 +26,11 @@ public class StoreAgentController {
 
     static final String AGENT_KEY_HEADER = "X-Agent-Key";
 
-    private final StoreService storeService;
+    private final AgentUpdateService agentUpdateService;
     private final AgentSecurityProperties agentProperties;
 
     @PutMapping("/{stationId}/url")
-    public ResponseEntity<Void> updateAgentUrl(
+    public ResponseEntity<AgentUpdateResponse> updateAgentUrl(
             @PathVariable UUID stationId,
             @RequestHeader(value = AGENT_KEY_HEADER, required = false) String agentKey,
             @Valid @RequestBody UpdateAgentUrlRequest request) {
@@ -38,7 +39,6 @@ public class StoreAgentController {
                 agentProperties.apiKey().getBytes(StandardCharsets.UTF_8))) {
             throw new AccessDeniedException("invalid_agent_key");
         }
-        storeService.updateAgentUrl(stationId, request.url());
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(agentUpdateService.handleHeartbeat(stationId, request));
     }
 }

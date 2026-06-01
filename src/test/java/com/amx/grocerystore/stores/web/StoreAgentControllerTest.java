@@ -7,8 +7,10 @@ import com.amx.grocerystore.core.security.TenantAuthenticationToken;
 import com.amx.grocerystore.core.security.UserPrincipal;
 import com.amx.grocerystore.core.web.GlobalExceptionHandler;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.stores.application.AgentUpdateService;
 import com.amx.grocerystore.stores.application.StoreService;
 import com.amx.grocerystore.stores.domain.StoreStationStatus;
+import com.amx.grocerystore.stores.web.dto.AgentUpdateResponse;
 import com.amx.grocerystore.stores.web.dto.StoreStationResponse;
 import com.amx.grocerystore.users.domain.UserRole;
 import jakarta.servlet.FilterChain;
@@ -30,7 +32,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -53,6 +54,9 @@ class StoreAgentControllerTest {
 
     @MockitoBean
     private StoreService storeService;
+
+    @MockitoBean
+    private AgentUpdateService agentUpdateService;
 
     @MockitoBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -83,19 +87,42 @@ class StoreAgentControllerTest {
     // ---- Agent ingest: PUT /api/v1/agent/stations/{stationId}/url ----
 
     @Test
-    void put_validKey_returns204() throws Exception {
+    void put_validKey_returns200WithUpdateMetadata() throws Exception {
         UUID id = UUID.randomUUID();
-        doNothing().when(storeService).updateAgentUrl(eq(id), any());
+        given(agentUpdateService.handleHeartbeat(eq(id), any()))
+                .willReturn(new AgentUpdateResponse(true, "v2.0.0",
+                        "https://github.com/AlexMartGong/pos-agent/releases/download/v2.0.0/pos-agent.jar",
+                        "a".repeat(64)));
 
         mvc.perform(put(AGENT_URL.formatted(id)).with(csrf())
                         .header("X-Agent-Key", VALID_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"url":"http://192.168.1.50:9100"}
+                                {"url":"http://192.168.1.50:9100","currentVersion":"1.0.0"}
                                 """))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updateAvailable").value(true))
+                .andExpect(jsonPath("$.latestVersion").value("v2.0.0"))
+                .andExpect(jsonPath("$.sha256").value("a".repeat(64)));
 
-        verify(storeService).updateAgentUrl(id, "http://192.168.1.50:9100");
+        verify(agentUpdateService).handleHeartbeat(eq(id), any());
+    }
+
+    @Test
+    void put_upToDate_returns200NoUpdate() throws Exception {
+        UUID id = UUID.randomUUID();
+        given(agentUpdateService.handleHeartbeat(eq(id), any()))
+                .willReturn(AgentUpdateResponse.noUpdate());
+
+        mvc.perform(put(AGENT_URL.formatted(id)).with(csrf())
+                        .header("X-Agent-Key", VALID_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"url":"http://192.168.1.50:9100","currentVersion":"9.9.9"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updateAvailable").value(false))
+                .andExpect(jsonPath("$.latestVersion").doesNotExist());
     }
 
     @Test
@@ -106,12 +133,12 @@ class StoreAgentControllerTest {
                         .header("X-Agent-Key", "wrong-key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"url":"http://192.168.1.50:9100"}
+                                {"url":"http://192.168.1.50:9100","currentVersion":"1.0.0"}
                                 """))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("forbidden"));
 
-        verify(storeService, never()).updateAgentUrl(any(), any());
+        verify(agentUpdateService, never()).handleHeartbeat(any(), any());
     }
 
     @Test
@@ -121,11 +148,11 @@ class StoreAgentControllerTest {
         mvc.perform(put(AGENT_URL.formatted(id)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"url":"http://192.168.1.50:9100"}
+                                {"url":"http://192.168.1.50:9100","currentVersion":"1.0.0"}
                                 """))
                 .andExpect(status().isForbidden());
 
-        verify(storeService, never()).updateAgentUrl(any(), any());
+        verify(agentUpdateService, never()).handleHeartbeat(any(), any());
     }
 
     @Test
@@ -147,13 +174,13 @@ class StoreAgentControllerTest {
         UUID id = UUID.randomUUID();
         doAnswer(inv -> {
             throw NotFoundException.station(id);
-        }).when(storeService).updateAgentUrl(eq(id), any());
+        }).when(agentUpdateService).handleHeartbeat(eq(id), any());
 
         mvc.perform(put(AGENT_URL.formatted(id)).with(csrf())
                         .header("X-Agent-Key", VALID_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"url":"http://192.168.1.50:9100"}
+                                {"url":"http://192.168.1.50:9100","currentVersion":"1.0.0"}
                                 """))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("station_not_found"));

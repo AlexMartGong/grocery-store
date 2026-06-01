@@ -8,6 +8,9 @@ public record UpdateAgentUrlRequest(
         @NotBlank
         @Size(max = 100)
         @Pattern(regexp = "^https?://.*", message = "Solo se permiten URLs seguras (http/https)")
-        String url
+        String url,
+
+        @Size(max = 50)
+        String currentVersion
 ) {
 }
