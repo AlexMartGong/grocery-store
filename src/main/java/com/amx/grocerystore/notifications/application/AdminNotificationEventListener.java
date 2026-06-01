@@ -15,7 +15,6 @@ import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -54,7 +53,7 @@ public class AdminNotificationEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onShiftClosed(ShiftClosedEvent event) {
         CashShiftResponse shift = event.shift();
         String text = String.format(
@@ -83,7 +82,7 @@ public class AdminNotificationEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onLowStock(LowStockEvent event) {
         String text = String.format(
                 "⚠️ Alerta de Inventario ⚠️%nEl producto *%s* se está agotando.%nQuedan: %s (Mínimo: %s)",
@@ -95,7 +94,7 @@ public class AdminNotificationEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSaleCancelled(SaleCancelledEvent event) {
         String text = "🚨 *ALERTA ANTI-FRAUDE* 🚨\n"
                 + "Se ha cancelado una venta por un total de *$" + event.totalAmount() + "*.\n"
@@ -115,7 +114,7 @@ public class AdminNotificationEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onInventoryLoss(InventoryLossEvent event) {
         String text = "⚠️ *MERMA DE INVENTARIO* ⚠️\n"
                 + "Se registró una pérdida de producto.\n"
