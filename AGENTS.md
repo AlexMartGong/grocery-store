@@ -301,8 +301,12 @@ API — stations are seeded via SQL.
 ### Notifications & Async Events
 
 Domain events (`<module>.domain.events.*Event` records) are published by services via `ApplicationEventPublisher`
-**after the persistence call returns** — listeners must treat the business outcome as final and never re-throw to the
-producer. Current publishers:
+**after the persistence call returns**, but listeners fire **only after the transaction commits**
+(`@TransactionalEventListener(phase = AFTER_COMMIT)`) so a rolled-back/retried tx — e.g. `SaleService.createSale`'s
+`@Retryable` deadlock retry — never emits a phantom or duplicate alert. Listeners must treat the business outcome as
+final and never re-throw to the producer. **Caveat:** `@TransactionalEventListener` silently drops events published with
+**no active transaction** (`fallbackExecution` left default `false`); every current publisher is `@Transactional`, so
+keep new publishers transactional too. Current publishers:
 - `CashShiftService.close` → `ShiftClosedEvent(CashShiftResponse)`.
 - `CustomerService.registerPayment` → `CustomerPaymentEvent(CustomerPaymentResponse, customerName, customerPhone)`.
 - `SaleService.createSale` → `LowStockEvent(productName, remainingStock, minStock)` per pending low-stock notification, parsed from `notifications` rows after the sale persists.
@@ -310,13 +314,17 @@ producer. Current publishers:
 - `InventoryService.adjustStock` → `InventoryLossEvent(productName, quantity, notes)` only when `reason == LOSS`.
 - `ProductService.updatePrices` → `ProductPriceChangedEvent(storeId, userId, productId, oldPrice, newPrice)` only when the sale price changes. **Not** a notification — consumed by `audit.application.AuditEventListener`, which writes an `audit_logs` row (see Audit Module).
 
-**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` with a `ThreadPoolTaskExecutor`
-(core=2, max=10, queue=50, prefix `async-`). All `@EventListener` handlers in `notifications.application.*` — plus
-`audit.application.AuditEventListener` — are annotated `@Async` so event publication never blocks the request thread. **Backpressure (mandatory):** the executor
-uses `CallerRunsPolicy` — a saturated queue makes the **calling thread** run the task inline (added latency, never a
-`RejectedExecutionException`/500 for the cashier), never `AbortPolicy`. **Graceful shutdown:**
-`setWaitForTasksToCompleteOnShutdown(true)` + `setAwaitTerminationSeconds(30)` so queued notifications drain (≤30s) on
-restart instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication`, enabling the
+**Async infra:** `core.config.AsyncConfig` enables `@EnableAsync` and exposes the `taskExecutor` bean as a
+**virtual-thread** `SimpleAsyncTaskExecutor` (`setVirtualThreads(true)`, prefix `async-`) — Java 21 virtual threads make
+the blocking 10s HTTP sends cheap, so bursts of low-stock/payment events never starve a fixed pool. All handlers in
+`notifications.application.*` — plus `audit.application.AuditEventListener` — are
+`@Async @TransactionalEventListener(AFTER_COMMIT)`: dispatch is deferred to commit and runs on a virtual thread, so
+publication never blocks the request thread and never fires for an uncommitted tx. Keep the bean **named `taskExecutor`**
+(the default `@Async` qualifier — renaming breaks resolution). **Backpressure (mandatory):** `setConcurrencyLimit(200)`
+caps in-flight tasks via a semaphore throttle — at the cap the submitting thread **blocks** until a slot frees (never a
+`RejectedExecutionException`/500 for the cashier); because dispatch is post-commit the block never holds a DB
+tx/connection open. **Graceful shutdown:** `setTaskTerminationTimeout(30_000)` lets active sends drain (≤30s) on restart
+instead of being dropped. **Retry infra:** `@EnableRetry` sits on `GroceryStoreApplication`, enabling the
 `@Retryable` deadlock policy on `SaleService` (see Sales endpoint).
 
 **HTTP client rule (mandatory):** every outbound `RestClient` **MUST** be built on a `SimpleClientHttpRequestFactory`
@@ -372,7 +380,8 @@ static owner-phone property.
   negative); the ledger keeps the sign, the message shows magnitude.
 
 When adding a new notification: define the event record under `<source-module>.domain.events` (include `UUID storeId`
-for owner-facing alerts), publish from the service after the persistence call, add an `@Async @EventListener` method on
+for owner-facing alerts), publish from the service after the persistence call, add an
+`@Async @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)` method on
 `AdminNotificationEventListener` (or a new listener). Route owner alerts through `sendAdminAlert(event.storeId(), text)`
 (channel-aware); route customer alerts through `EvolutionWhatsAppClient.sendMessage(phone, text)` directly. Do **not**
 add new HTTP error handling at the listener layer — the client owns failure isolation.
@@ -380,8 +389,8 @@ add new HTTP error handling at the listener layer — the client owns failure is
 ### Audit Module
 
 General audit trail for critical admin actions. The `audit` module holds one aggregate, `AuditLog` (`audit.domain`).
-Rows are **written by Java, not DB triggers**: a domain event is published after persistence and an `@Async @EventListener`
-inserts the row.
+Rows are **written by Java, not DB triggers**: a domain event is published after persistence and an
+`@Async @TransactionalEventListener(AFTER_COMMIT)` inserts the row once the producing tx commits.
 
 **Schema** (`src/main/resources/script.sql` — `MODULE 5: AUDIT LOGS`): table `audit_logs` with `id`, `store_id`
 (FK `stores`, `ON DELETE RESTRICT`), `user_id` (FK `users`, **nullable**, `ON DELETE SET NULL`), `action VARCHAR(50)`,
@@ -392,8 +401,8 @@ inserts the row.
 are cross-module FKs → plain `UUID` (no JPA association, per FK Strategy). `created_at` is DB-owned
 (`@Column(insertable = false, updatable = false)`, no `@PrePersist`).
 
-**Write path:** `AuditEventListener` (`audit.application`, `@Component @RequiredArgsConstructor`, `@Async @EventListener`)
-consumes `ProductPriceChangedEvent` and saves an `AuditLog` (`action = "PRICE_CHANGED"`, `entityType = "PRODUCT"`,
+**Write path:** `AuditEventListener` (`audit.application`, `@Component @RequiredArgsConstructor`,
+`@Async @TransactionalEventListener(AFTER_COMMIT)`) consumes `ProductPriceChangedEvent` and saves an `AuditLog` (`action = "PRICE_CHANGED"`, `entityType = "PRODUCT"`,
 `entityId = productId`, `details = {oldPrice, newPrice}`). The **producing service captures `userId` via
 `SecurityUtils.currentUserId()` before publishing** — the `@Async` thread carries no `SecurityContext`, so never call
 `SecurityUtils` from inside the listener. To audit a new action, publish a new event (carrying `storeId` + `userId`) and
