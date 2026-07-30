@@ -9,7 +9,7 @@ Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocer
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
 Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — the `@SpringBootApplication` entry point is `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting), AWS SDK v2 `s3` 2.46.7 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
 **Tooling:** Use the Maven wrapper (`./mvnw`) for all build and test commands.
 
 ## Build & Development Commands
@@ -98,6 +98,8 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`, `station_not_found`) |
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
 | `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`) |
+| `InvalidFileException` | 400 | from `ex.getCode()` (`file_required`, `image_type_not_allowed`, `image_too_large`) |
+| `MaxUploadSizeExceededException` | 400 | `image_too_large` (container multipart-limit backstop) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
 | Rate-limit filter (`AuthRateLimitFilter`) | 429 | `too_many_requests` (+ `Retry-After: 60`) |
 | Filter-layer (via entry point) | 401 | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
@@ -137,6 +139,24 @@ trail (see Audit Module). Purchase-cost-only or no-op edits do not emit.
 **Products list filter:** `active` param — omitted or `true` → only active products; `false` → all products. Backed by
 `ProductRepository.findProducts(storeId, active, search, pageable)` (`@Query`); service maps `active=false` → `null`
 (predicate dropped), otherwise `TRUE`.
+
+**Product image endpoints:** `POST /api/v1/products/{id}/image` (`OWNER`) — multipart upload (`@RequestParam("file")`).
+`ProductService.uploadProductImage` validates non-empty, MIME ∈ {`image/jpeg`, `image/png`, `image/webp`}, ≤2MB
+(violations → `InvalidFileException` → 400); tenant-scoped via `findByIdAndStoreIdAndActiveTrue` (cross-store → 404
+`product_not_found`). Object key `products/{storeId}/{productId}_{timestamp}.{ext}` (extension from MIME, never client
+filename; timestamp busts browser cache); the previous image object is deleted first (best-effort). Returns 200 +
+`ProductResponse` with the new `image_url`. `DELETE /api/v1/products/{id}/image` (`OWNER`) — deletes the R2 object
+(best-effort), nulls `image_url`; idempotent when no image; 200 + `ProductResponse`. Multipart container limits
+(`spring.servlet.multipart.max-file-size=3MB` / `max-request-size=4MB`) sit above the 2MB business limit so the
+specific `InvalidFileException` code fires before the `MaxUploadSizeExceededException` backstop.
+
+**Storage abstraction (`core.storage`):** `StorageService` interface (`uploadFile(MultipartFile, objectKey) → public
+URL`, `deleteFile(objectKey)`), implemented by `R2StorageService` over AWS SDK v2 `S3Client` (bean in `StorageConfig`:
+endpoint `https://{accountId}.r2.cloudflarestorage.com`, region `auto`, path-style access, static credentials from
+`R2StorageProperties` / `app.storage.r2.*`). `deleteFile` swallows `S3Exception` (`log.warn`) — object deletion is
+best-effort and must never fail the business operation. Reuse `StorageService` for any future file uploads.
+`products.image_url VARCHAR(500)` stores the full public URL (`R2_PUBLIC_URL + "/" + objectKey`); live DBs need a
+manual `ALTER TABLE products ADD COLUMN image_url VARCHAR(500);` (ddl-auto=validate never alters).
 
 **Server-side search (stores, products, customers):** `GET /api/v1/stores`, `GET /api/v1/products`, and
 `GET /api/v1/customers` accept optional `search` `@RequestParam`. Case-insensitive `LIKE %search%` over `name`/`code`
@@ -178,7 +198,9 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 factories here rather than instantiating with raw
 strings. Use `InvalidResourceStateException` for precondition failures on existing resources (wrong status,
 disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
-`DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing).
+`DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing). `InvalidFileException` (400)
+covers rejected multipart uploads (empty file, disallowed MIME type, oversize) — factories `emptyFile()`,
+`imageTypeNotAllowed()`, `imageTooLarge()`.
 
 **Customer payment endpoint:** `POST /api/v1/customers/{id}/payments` (`OWNER`/`CASHIER`) — register a credit
 repayment via `CreatePaymentRequest(amount @Positive)`. Returns 201 + `CustomerPaymentResponse`. DB trigger
@@ -460,7 +482,10 @@ Strictly adhere to SOLID in every implementation:
   (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
   via `app.security.jwt.issuer`. Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.
   `AGENT_API_KEY` (default `default-agent-secret`, bound to `app.security.agent.api-key` via `AgentSecurityProperties`)
-  — shared static key for the print-agent bridge.
+  — shared static key for the print-agent bridge. `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
+  (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to
+  `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot —
+  uploads then fail at request time.
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on

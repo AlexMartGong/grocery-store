@@ -1,5 +1,6 @@
 package com.amx.grocerystore.core.web;
 
+import com.amx.grocerystore.core.web.exception.InvalidFileException;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -71,9 +73,33 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.fields.name").exists());
     }
 
+    @Test
+    void invalidFile_returns400WithCode() throws Exception {
+        mvc.perform(post("/throw/invalid-file"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("image_type_not_allowed"));
+    }
+
+    @Test
+    void maxUploadSize_returns400ImageTooLarge() throws Exception {
+        mvc.perform(post("/throw/max-upload-size"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("image_too_large"));
+    }
+
     @RestController
     @RequestMapping("/throw")
     static class ThrowingController {
+
+        @PostMapping("/invalid-file")
+        public void invalidFile() {
+            throw InvalidFileException.imageTypeNotAllowed();
+        }
+
+        @PostMapping("/max-upload-size")
+        public void maxUploadSize() {
+            throw new MaxUploadSizeExceededException(2 * 1024 * 1024);
+        }
 
         @PostMapping("/bad-credentials")
         public void badCredentials() {

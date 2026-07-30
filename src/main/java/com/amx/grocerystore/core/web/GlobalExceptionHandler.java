@@ -2,6 +2,7 @@ package com.amx.grocerystore.core.web;
 
 import com.amx.grocerystore.core.web.dto.ErrorResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidFileException;
 import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -14,6 +15,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -73,6 +75,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidState(InvalidResourceStateException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(InvalidFileException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidFile(InvalidFileException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponse> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("image_too_large"));
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

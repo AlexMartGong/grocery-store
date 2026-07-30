@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URI;
 import java.util.UUID;
@@ -82,5 +83,18 @@ public class ProductController {
     @PreAuthorize("hasAnyRole('OWNER','CASHIER')")
     public ResponseEntity<ProductResponse> searchByBarcode(@RequestParam @NotBlank String barcode) {
         return ResponseEntity.ok(productService.findByBarcode(barcode));
+    }
+
+    @PostMapping("/{id}/image")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<ProductResponse> uploadImage(@PathVariable UUID id,
+                                                       @RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(productService.uploadProductImage(id, file));
+    }
+
+    @DeleteMapping("/{id}/image")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<ProductResponse> deleteImage(@PathVariable UUID id) {
+        return ResponseEntity.ok(productService.deleteProductImage(id));
     }
 }

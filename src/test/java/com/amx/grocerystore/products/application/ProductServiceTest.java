@@ -2,8 +2,10 @@ package com.amx.grocerystore.products.application;
 
 import com.amx.grocerystore.core.security.TenantAuthenticationToken;
 import com.amx.grocerystore.core.security.UserPrincipal;
+import com.amx.grocerystore.core.storage.StorageService;
 import com.amx.grocerystore.core.web.dto.PageResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
+import com.amx.grocerystore.core.web.exception.InvalidFileException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.domain.UnitOfMeasure;
@@ -26,6 +28,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
@@ -36,10 +39,12 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class ProductServiceTest {
@@ -51,6 +56,9 @@ class ProductServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Mock
+    private StorageService storageService;
 
     @InjectMocks
     private ProductService productService;
@@ -348,6 +356,135 @@ class ProductServiceTest {
 
         assertThat(existing.getPurchaseCost()).isEqualByComparingTo("18.00");
         verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void uploadProductImage_success_uploadsAndSetsImageUrl() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true);
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+        given(storageService.uploadFile(any(), anyString()))
+                .willAnswer(inv -> "https://cdn.example.com/" + inv.getArgument(1));
+
+        MockMultipartFile file =
+                new MockMultipartFile("file", "photo.jpg", "image/jpeg", "img-bytes".getBytes());
+        ProductResponse response = productService.uploadProductImage(id, file);
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(storageService).uploadFile(eq(file), keyCaptor.capture());
+        assertThat(keyCaptor.getValue()).matches("products/" + TENANT_ID + "/" + id + "_\\d+\\.jpg");
+        assertThat(existing.getImageUrl()).isEqualTo("https://cdn.example.com/" + keyCaptor.getValue());
+        assertThat(response.imageUrl()).isEqualTo(existing.getImageUrl());
+        verify(productRepository).save(existing);
+        verify(storageService, never()).deleteFile(any());
+    }
+
+    @Test
+    void uploadProductImage_existingImage_deletesOldObjectBeforeUpload() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true);
+        String oldKey = "products/" + TENANT_ID + "/" + id + "_1000.png";
+        existing.setImageUrl("https://cdn.example.com/" + oldKey);
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+        given(storageService.uploadFile(any(), anyString()))
+                .willAnswer(inv -> "https://cdn.example.com/" + inv.getArgument(1));
+
+        MockMultipartFile file =
+                new MockMultipartFile("file", "photo.webp", "image/webp", "img-bytes".getBytes());
+        productService.uploadProductImage(id, file);
+
+        verify(storageService).deleteFile(oldKey);
+        assertThat(existing.getImageUrl()).endsWith(".webp");
+    }
+
+    @Test
+    void uploadProductImage_productFromAnotherStore_throwsNotFound_noStorageCall() {
+        UUID id = UUID.randomUUID();
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.empty());
+
+        MockMultipartFile file =
+                new MockMultipartFile("file", "photo.jpg", "image/jpeg", "img-bytes".getBytes());
+
+        assertThatThrownBy(() -> productService.uploadProductImage(id, file))
+                .isInstanceOf(NotFoundException.class)
+                .extracting("code").isEqualTo("product_not_found");
+
+        verifyNoInteractions(storageService);
+        verify(productRepository, never()).save(any());
+    }
+
+    @Test
+    void uploadProductImage_disallowedMimeType_throwsInvalidFile() {
+        MockMultipartFile file =
+                new MockMultipartFile("file", "notes.txt", "text/plain", "not-an-image".getBytes());
+
+        assertThatThrownBy(() -> productService.uploadProductImage(UUID.randomUUID(), file))
+                .isInstanceOf(InvalidFileException.class)
+                .extracting("code").isEqualTo("image_type_not_allowed");
+
+        verifyNoInteractions(storageService, productRepository);
+    }
+
+    @Test
+    void uploadProductImage_oversizedFile_throwsInvalidFile() {
+        byte[] oversized = new byte[2 * 1024 * 1024 + 1];
+        MockMultipartFile file =
+                new MockMultipartFile("file", "big.png", "image/png", oversized);
+
+        assertThatThrownBy(() -> productService.uploadProductImage(UUID.randomUUID(), file))
+                .isInstanceOf(InvalidFileException.class)
+                .extracting("code").isEqualTo("image_too_large");
+
+        verifyNoInteractions(storageService, productRepository);
+    }
+
+    @Test
+    void uploadProductImage_emptyFile_throwsInvalidFile() {
+        MockMultipartFile file =
+                new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[0]);
+
+        assertThatThrownBy(() -> productService.uploadProductImage(UUID.randomUUID(), file))
+                .isInstanceOf(InvalidFileException.class)
+                .extracting("code").isEqualTo("file_required");
+
+        verifyNoInteractions(storageService, productRepository);
+    }
+
+    @Test
+    void deleteProductImage_withImage_deletesObjectAndClearsUrl() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true);
+        String key = "products/" + TENANT_ID + "/" + id + "_1000.jpg";
+        existing.setImageUrl("https://cdn.example.com/" + key);
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+        given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
+
+        ProductResponse response = productService.deleteProductImage(id);
+
+        verify(storageService).deleteFile(key);
+        assertThat(existing.getImageUrl()).isNull();
+        assertThat(response.imageUrl()).isNull();
+        verify(productRepository).save(existing);
+    }
+
+    @Test
+    void deleteProductImage_noImage_isIdempotent_noStorageCallNoSave() {
+        UUID id = UUID.randomUUID();
+        Product existing = product(id, true);
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(id, TENANT_ID))
+                .willReturn(Optional.of(existing));
+
+        ProductResponse response = productService.deleteProductImage(id);
+
+        assertThat(response.imageUrl()).isNull();
+        verifyNoInteractions(storageService);
+        verify(productRepository, never()).save(any());
     }
 
     @Test

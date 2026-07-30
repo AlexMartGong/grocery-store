@@ -17,6 +17,7 @@ public record ProductResponse(
         @JsonProperty("current_stock") BigDecimal currentStock,
         @JsonProperty("minimum_stock") BigDecimal minimumStock,
         @JsonProperty("unit_of_measure") UnitOfMeasure unitOfMeasure,
+        @JsonProperty("image_url") String imageUrl,
         boolean active,
         @JsonProperty("updated_at") OffsetDateTime updatedAt
 ) {
@@ -31,6 +32,7 @@ public record ProductResponse(
                 product.getCurrentStock(),
                 product.getMinimumStock(),
                 product.getUnitOfMeasure(),
+                product.getImageUrl(),
                 product.isActive(),
                 product.getUpdatedAt()
         );

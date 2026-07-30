@@ -130,6 +130,7 @@ CREATE TABLE products
     current_stock   NUMERIC(10, 2) NOT NULL DEFAULT 0,
     minimum_stock   NUMERIC(10, 2) NOT NULL DEFAULT 5,
     unit_of_measure VARCHAR(10)    NOT NULL DEFAULT 'PIECE' CHECK (unit_of_measure IN ('PIECE', 'KILO')),
+    image_url       VARCHAR(500),
     active          BOOLEAN        NOT NULL DEFAULT TRUE,
     updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     UNIQUE (store_id, barcode)
