@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.0.6.
 **Base package:** `com.amx.grocerystore` — entry point `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting), AWS SDK v2 `s3` 2.46.7 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
 **Tooling:** Maven wrapper (`./mvnw`) for all build/test commands.
 
 ## Build & Development Commands
@@ -83,6 +83,8 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 |`NotFoundException`|404|from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `open_shift_not_found`, `sale_not_found`, `station_not_found`)|
 |`DuplicateResourceException`|409|from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`)|
 |`InvalidResourceStateException`|409|from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`)|
+|`InvalidFileException`|400|from `ex.getCode()` (`file_required`, `image_type_not_allowed`, `image_too_large`)|
+|`MaxUploadSizeExceededException`|400|`image_too_large` (container multipart-limit backstop)|
 |`DataIntegrityViolationException`|409|`conflict`|
 |Rate-limit filter (`AuthRateLimitFilter`)|429|`too_many_requests` (+ `Retry-After: 60`)|
 |Filter-layer (via entry point)|401|`invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive`|
@@ -91,6 +93,7 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 - `InvalidResourceStateException` — precondition failures on existing resources (wrong status, disallowed role/reason, invalid payment split).
 - `DuplicateResourceException` — uniqueness conflicts.
 - `NotFoundException` — missing resources.
+- `InvalidFileException` — rejected multipart uploads (empty file, disallowed MIME type, oversize) → 400.
 
 **Concurrency resilience (mandatory):** any service operation prone to deadlocks or concurrency-driven integrity violations — multi-row writes that contend on the same stock/balance rows under concurrent cashiers (e.g. `SaleService.createSale`, `cancelSale`) — **MUST** be wrapped in `@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))`. `@EnableRetry` keeps the retry advisor outer to `@Transactional` so each attempt rolls back and re-opens the tx; after attempts exhaust the original exception propagates → `GlobalExceptionHandler` → 409. Do **not** catch-and-swallow these inside the service.
 
@@ -128,6 +131,11 @@ CRUD endpoints share shape: `POST` (201 + `Location`), `GET /{id}`, `GET` (pagin
 - **`GET /api/v1/cash/shifts`** (`OWNER`) — paginated audit history, `opened_at DESC`.
 - **`POST /api/v1/sales`** (`OWNER`/`CASHIER`) — `total = Σ(qty × unitPrice)` `HALF_UP` scale 2. **Tenant scoping (VULN-01):** a non-null `customerId` is validated against the store via `customerRepository.findByIdAndStoreId(...)` **before** the payment switch — for **every** method, not just CREDIT/MIXED — so a cross-store customer → 404 `customer_not_found`; the loaded `Customer` is reused by the limit checks. Payment-method rules in `SaleService`: `CASH`/`CARD`/`TRANSFER` → full pay (customer optional); `CREDIT` → customer required + credit-limit check; `MIXED` → customer required + strict `0 < amount_paid < total`, credit-limit checked against `amountCredited` only. Triggers `fn_register_credit` / `fn_apply_sale_item` own balance + stock. **Deadlock retry:** `SaleService.createSale` (and `cancelSale`) carry `@Retryable(retryFor = {DataIntegrityViolationException, CannotAcquireLockException}, backoff = @Backoff(delay = 200, multiplier = 2))` — default 3 attempts (200ms, 400ms) so concurrent cashiers hitting a PostgreSQL deadlock (`40P01` → `CannotAcquireLockException`) retry on a fresh transaction instead of 500ing. `@EnableRetry` (on `GroceryStoreApplication`) makes the retry advisor outer to `@Transactional` (higher precedence: `LOWEST_PRECEDENCE - 1`), so each attempt rolls back and re-opens the tx. After attempts exhaust, the original exception propagates → `GlobalExceptionHandler` → 409 (no recovery method).
 - **`POST /api/v1/sales/{id}/cancel`** (`OWNER`/`CASHIER`) — inserts `SaleCancellation`. Trigger `fn_cancel_sale` flips status, returns stock (`inventory_movements` reason `CANCELLATION`), reverses credit. Service must NOT mutate `sale.status`. Idempotent: 409 `sale_already_canceled`. Same `@Retryable` deadlock policy as `createSale`. Publishes `SaleCancelledEvent`.
+
+- **`POST /api/v1/products/{id}/image`** (`OWNER`) — multipart upload `@RequestParam("file")`. Service-side validation (`ProductService`): non-empty, MIME ∈ {`image/jpeg`, `image/png`, `image/webp`}, ≤2MB — violations throw `InvalidFileException` → 400. Tenant-scoped via `findByIdAndStoreIdAndActiveTrue` (cross-store → 404 `product_not_found`). Object key `products/{storeId}/{productId}_{timestamp}.{ext}` (extension derived from MIME, never client filename; timestamp busts browser cache); a previous image's object is deleted first (best-effort). Returns 200 + `ProductResponse` with new `image_url`. Multipart container limits: `spring.servlet.multipart.max-file-size=3MB` / `max-request-size=4MB` — kept above the 2MB business limit so `InvalidFileException` (specific code) fires before the `MaxUploadSizeExceededException` backstop.
+- **`DELETE /api/v1/products/{id}/image`** (`OWNER`) — deletes the R2 object (best-effort) and nulls `image_url`; idempotent when no image. Returns 200 + `ProductResponse`.
+
+**Storage abstraction (`core.storage`):** `StorageService` interface (`uploadFile(MultipartFile, objectKey) → public URL`, `deleteFile(objectKey)`), implemented by `R2StorageService` over AWS SDK v2 `S3Client` (bean in `StorageConfig`: endpoint `https://{accountId}.r2.cloudflarestorage.com`, region `auto`, path-style access, static credentials from `R2StorageProperties` / `app.storage.r2.*`). `deleteFile` swallows `S3Exception` (`log.warn`) — object deletion is best-effort and must never fail the business operation. Reuse `StorageService` for any future file uploads. `products.image_url VARCHAR(500)` stores the full public URL (`R2_PUBLIC_URL + "/" + objectKey`); live DBs need a manual `ALTER TABLE products ADD COLUMN image_url VARCHAR(500);` (ddl-auto=validate never alters).
 
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, `@Enumerated(EnumType.STRING)`, column `unit_of_measure VARCHAR(10)`.
 
@@ -223,6 +231,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
 - `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE` — Evolution / WhatsApp gateway. (Owner alerts route to the per-store `Store.whatsapp` column — no global phone env var.)
 - `TELEGRAM_BOT_TOKEN` (default empty) — bound to `telegram.bot.token`, used by `TelegramBotClient` for stores with `preferred_admin_channel = 'TELEGRAM'`. Empty token → Telegram sends no-op. Owner alerts route to the per-store `Store.telegramChatId` column — no global chat-id env var.
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot — uploads then fail at request time.
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
 
 ## Deployment & CI
