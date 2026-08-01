@@ -231,7 +231,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
 - `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE` — Evolution / WhatsApp gateway. (Owner alerts route to the per-store `Store.whatsapp` column — no global phone env var.)
 - `TELEGRAM_BOT_TOKEN` (default empty) — bound to `telegram.bot.token`, used by `TelegramBotClient` for stores with `preferred_admin_channel = 'TELEGRAM'`. Empty token → Telegram sends no-op. Owner alerts route to the per-store `Store.telegramChatId` column — no global chat-id env var.
-- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot — uploads then fail at request time.
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot — uploads then fail at request time (`StorageConfig.orPlaceholder` substitutes `"unconfigured"` for blank keys; `AwsBasicCredentials` rejects blank).
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
 
 ## Deployment & CI
@@ -241,6 +241,15 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - **Transfer:** `appleboy/scp-action` copies `target/*.jar` → `/opt/grocery-store` (`strip_components: 1`). Spring Boot's `*.jar.original` does not match `*.jar`, so only the runnable jar ships.
 - **Restart:** `appleboy/ssh-action` renames `grocery-store-*.jar` → `/opt/grocery-store/ventacore.jar` (fixed name the unit points at — glob avoids clobbering the existing `ventacore.jar`), then `sudo systemctl restart ventacore` (deploy user has NOPASSWD) + `status --no-pager`.
 - **Required repo secrets:** `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`. systemd unit: `ventacore.service`.
+
+### Docker / Compose (local + alternative deploy)
+
+Root `Dockerfile` + `docker-compose.yml`; env template `.env.example` (copy to `.env` — gitignored, never commit).
+- **Dockerfile:** multi-stage. Builder `eclipse-temurin:21-jdk-alpine` — copies `mvnw`/`.mvn`/`pom.xml`, `./mvnw dependency:go-offline -B` (cached layer), then `src/` + `./mvnw clean package -DskipTests -B`. Runtime `eclipse-temurin:21-jre-alpine` — non-root user `ventacore`, `COPY target/*.jar app.jar` (glob skips `*.jar.original`), `EXPOSE 8080`, entrypoint `java -XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -jar app.jar`. `.dockerignore` keeps `target/`, VCS/IDE dirs, and `.env*` out of the build context.
+- **Compose services** (network `ventacore-net` bridge): `db` = `postgres:16-alpine` (container `ventacore-db`, volume `postgres_data` → fixed name `ventacore_postgres_data`, `pg_isready` healthcheck 5s×5); `app` builds from root Dockerfile (container `ventacore-app`, `8080:8080` — host Caddy keeps proxying `localhost:8080`), `depends_on: db: condition: service_healthy`, passes all `DB_*`/`JWT_*`/`AGENT_API_KEY`/`EVOLUTION_*`/`TELEGRAM_BOT_TOKEN`/`R2_*`/`CORS_ALLOWED_ORIGINS` env vars from `.env` with `DB_HOST=db`. `db` publishes **no** host port (no clash with host Postgres on 5432).
+- **Schema init (critical):** `ddl-auto=validate` never creates schema, so compose mounts `./src/main/resources/script.sql` → `/docker-entrypoint-initdb.d/01-schema.sql:ro` — Postgres runs it **only on an empty volume**; a fresh stack boots fully initialized. Schema changes after volume creation still need manual `ALTER`/`psql` (initdb scripts don't re-run).
+- **Compose default DB name is `grocerystore`** (`${DB_NAME:-grocerystore}`) — differs from the app's bare fallback `grocery_store`; harmless because compose passes `DB_NAME` to both containers. Keep `.env` values authoritative.
+- **Usage:** `docker compose up -d --build`; validate config `docker compose config -q`. CI/VPS still deploys the bare jar (above) — compose is not wired into `deploy.yml`.
 
 ## Testing
 
