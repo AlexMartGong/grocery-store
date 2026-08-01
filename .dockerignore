@@ -1,0 +1,17 @@
+# Runtime-only Dockerfile needs the pre-built jar in the context;
+# everything else under target/ stays out (*.jar doesn't match *.jar.original)
+target/*
+!target/*.jar
+.git/
+.github/
+.idea/
+.claude/
+.agents/
+.junie/
+.vscode/
+*.iml
+*.md
+qodana.yaml
+skills-lock.json
+.env
+.env.*
