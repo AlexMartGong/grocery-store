@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ventacore-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-grocerystore}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # ddl-auto=validate: Hibernate never creates the schema, so a fresh
+      # volume must be initialized from script.sql (runs only on empty volume)
+      - ./src/main/resources/script.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-grocerystore}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ventacore-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ventacore-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-grocerystore}
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-480}
+      AGENT_API_KEY: ${AGENT_API_KEY:-default-agent-secret}
+      EVOLUTION_BASE_URL: ${EVOLUTION_BASE_URL}
+      EVOLUTION_APIKEY: ${EVOLUTION_APIKEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-ventacore-products}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+    networks:
+      - ventacore-net
+
+volumes:
+  postgres_data:
+    name: ventacore_postgres_data
+
+networks:
+  ventacore-net:
+    driver: bridge

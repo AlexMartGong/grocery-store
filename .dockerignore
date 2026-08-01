@@ -1,0 +1,14 @@
+target/
+.git/
+.github/
+.idea/
+.claude/
+.agents/
+.junie/
+.vscode/
+*.iml
+*.md
+qodana.yaml
+skills-lock.json
+.env
+.env.*
