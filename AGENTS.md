@@ -506,20 +506,18 @@ Strictly adhere to SOLID in every implementation:
 
 ## Deployment & CI
 
-`.github/workflows/deploy.yml` — push to `master` triggers build + deploy to a Netcup Ubuntu VPS.
-- **Build:** Temurin JDK 21 (`actions/setup-java@v4`, Maven cache) → `./mvnw clean package -DskipTests` (tests gated to a separate flow).
-- **Transfer:** `appleboy/scp-action` copies `target/*.jar` → `/opt/grocery-store` (`strip_components: 1`). Spring Boot's `*.jar.original` does not match `*.jar`, so only the runnable jar ships.
-- **Restart:** `appleboy/ssh-action` renames `grocery-store-*.jar` → `/opt/grocery-store/ventacore.jar` (fixed name the unit points at — glob avoids clobbering the existing `ventacore.jar`), then `sudo systemctl restart ventacore` (deploy user has NOPASSWD) + `status --no-pager`.
-- **Required repo secrets:** `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`. systemd unit: `ventacore.service`.
+`.github/workflows/deploy.yml` — push to `master` triggers a Docker Compose deploy on the Netcup Ubuntu VPS. **No runner-side build or checkout** — the VPS pulls the repo and builds the multi-stage image itself.
+- **Single step:** `appleboy/ssh-action@v1.2.0` (secrets `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`) runs on the VPS: `cd /opt/grocery-store` → `git checkout master` → `git pull origin master` → `docker compose up -d --build` → `docker image prune -f` (drops dangling layers left by the multi-stage build).
+- **Server prerequisites (not in workflow):** `/opt/grocery-store` is a git clone with `origin` reachable; `.env` present there (gitignored — compose reads it); deploy user has docker permissions. Host Caddy keeps proxying `localhost:8080` (compose maps `8080:8080`).
 
-### Docker / Compose (local + alternative deploy)
+### Docker / Compose (local + VPS deploy)
 
 Root `Dockerfile` + `docker-compose.yml`; env template `.env.example` (copy to `.env` — gitignored, never commit).
 - **Dockerfile:** multi-stage. Builder `eclipse-temurin:21-jdk-alpine` — copies `mvnw`/`.mvn`/`pom.xml`, `./mvnw dependency:go-offline -B` (cached layer), then `src/` + `./mvnw clean package -DskipTests -B`. Runtime `eclipse-temurin:21-jre-alpine` — non-root user `ventacore`, `COPY target/*.jar app.jar` (glob skips `*.jar.original`), `EXPOSE 8080`, entrypoint `java -XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -jar app.jar`. `.dockerignore` keeps `target/`, VCS/IDE dirs, and `.env*` out of the build context.
 - **Compose services** (network `ventacore-net` bridge): `db` = `postgres:16-alpine` (container `ventacore-db`, volume `postgres_data` → fixed name `ventacore_postgres_data`, `pg_isready` healthcheck 5s×5); `app` builds from root Dockerfile (container `ventacore-app`, `8080:8080` — host Caddy keeps proxying `localhost:8080`), `depends_on: db: condition: service_healthy`, passes all `DB_*`/`JWT_*`/`AGENT_API_KEY`/`EVOLUTION_*`/`TELEGRAM_BOT_TOKEN`/`R2_*`/`CORS_ALLOWED_ORIGINS` env vars from `.env` with `DB_HOST=db`. `db` publishes **no** host port (no clash with host Postgres on 5432).
 - **Schema init (critical):** `ddl-auto=validate` never creates schema, so compose mounts `./src/main/resources/script.sql` → `/docker-entrypoint-initdb.d/01-schema.sql:ro` — Postgres runs it **only on an empty volume**; a fresh stack boots fully initialized. Schema changes after volume creation still need manual `ALTER`/`psql` (initdb scripts don't re-run).
 - **Compose default DB name is `grocerystore`** (`${DB_NAME:-grocerystore}`) — differs from the app's bare fallback `grocery_store`; harmless because compose passes `DB_NAME` to both containers. Keep `.env` values authoritative.
-- **Usage:** `docker compose up -d --build`; validate config `docker compose config -q`. CI/VPS still deploys the bare jar (above) — compose is not wired into `deploy.yml`.
+- **Usage:** `docker compose up -d --build`; validate config `docker compose config -q`. CI deploys via compose on the VPS (see Deployment & CI above) — the bare-jar/systemd flow is retired.
 
 ## Testing Patterns
 
