@@ -24,10 +24,20 @@ public class StorageConfig {
                 .region(Region.of("auto"))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(
-                                properties.accessKeyId(), properties.secretAccessKey())))
+                                orPlaceholder(properties.accessKeyId()),
+                                orPlaceholder(properties.secretAccessKey()))))
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(true)
                         .build())
                 .build();
+    }
+
+    /**
+     * The app must boot without R2 configured (uploads then fail at request
+     * time), but {@link AwsBasicCredentials} rejects blank keys — substitute
+     * a placeholder so bean creation never fails on empty credentials.
+     */
+    private static String orPlaceholder(String value) {
+        return (value == null || value.isBlank()) ? "unconfigured" : value;
     }
 }
