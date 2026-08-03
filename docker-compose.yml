@@ -3,6 +3,9 @@ services:
     image: postgres:16-alpine
     container_name: ventacore-db
     restart: unless-stopped
+    ports:
+      # loopback-only: SSH-tunnel access on the VPS, never exposed publicly
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-grocerystore}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
