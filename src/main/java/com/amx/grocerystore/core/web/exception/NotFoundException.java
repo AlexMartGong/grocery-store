@@ -54,4 +54,8 @@ public class NotFoundException extends RuntimeException {
         return new NotFoundException("subscription_not_found",
                 "Active subscription not found for store: " + storeId);
     }
+
+    public static NotFoundException plan(String code) {
+        return new NotFoundException("plan_not_found", "Active subscription plan not found: " + code);
+    }
 }

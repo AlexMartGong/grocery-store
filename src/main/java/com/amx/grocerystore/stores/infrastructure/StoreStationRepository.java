@@ -10,4 +10,6 @@ import java.util.UUID;
 public interface StoreStationRepository extends JpaRepository<StoreStation, UUID> {
 
     List<StoreStation> findByStoreIdAndStatusNot(UUID storeId, StoreStationStatus status);
+
+    long countByStoreIdAndStatus(UUID storeId, StoreStationStatus status);
 }

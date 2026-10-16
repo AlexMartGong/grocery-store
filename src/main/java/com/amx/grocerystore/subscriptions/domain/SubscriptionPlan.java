@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -34,6 +35,15 @@ public class SubscriptionPlan {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    /**
+     * Stable business key the API subscribes stores by (STANDARD / PRO / BUSINESS).
+     * Names are marketing copy and may change; this must not.
+     */
+    @NotBlank
+    @Size(max = 30)
+    @Column(nullable = false, length = 30, unique = true)
+    private String code;
+
     @NotBlank
     @Size(max = 50)
     @Column(nullable = false, length = 50)
@@ -46,6 +56,20 @@ public class SubscriptionPlan {
     @NotNull
     @Column(name = "setup_fee", nullable = false, precision = 10, scale = 2)
     private BigDecimal setupFee;
+
+    /**
+     * Entitlement: how many ACTIVE store_stations (cajas) this tier allows.
+     * Enforced by {@code SubscriptionService.validateStationQuota}.
+     */
+    @Positive
+    @Column(name = "max_stations", nullable = false)
+    private int maxStations;
+
+    @Column(name = "includes_notifications", nullable = false)
+    private boolean includesNotifications;
+
+    @Column(name = "includes_invoicing", nullable = false)
+    private boolean includesInvoicing;
 
     @Column(columnDefinition = "TEXT")
     private String description;

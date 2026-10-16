@@ -44,7 +44,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 |-|-|
 | `admin` | `AdminUser` |
 | `stores` | `Store`, `StoreStation` |
-| `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` |
+| `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` (3 tiers + billing cycles — see Subscriptions & Billing Module) |
 | `users` | `User` |
 | `products` | `Product` |
 | `customers` | `Customer`, `CustomerPayment` |
@@ -95,9 +95,9 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `AccessDeniedException` | 403 | `forbidden` |
 | `AuthenticationException` (rest) | 401 | `unauthenticated` |
 | `MethodArgumentNotValidException` | 400 | `validation_failed` + `fields` |
-| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`, `station_not_found`) |
+| `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`, `station_not_found`, `subscription_not_found`, `plan_not_found`) |
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
-| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`) |
+| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`, `station_limit_exceeded`) |
 | `InvalidFileException` | 400 | from `ex.getCode()` (`file_required`, `image_type_not_allowed`, `image_too_large`) |
 | `MaxUploadSizeExceededException` | 400 | `image_too_large` (container multipart-limit backstop) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
@@ -165,8 +165,9 @@ filters using `(:status IS NULL OR ...)` / `(:active IS NULL OR ...)` for typed 
 `(:search = '' OR ...)` for the text term — the empty-string sentinel avoids PostgreSQL's
 `function lower(bytea) does not exist` error caused by JDBC binding `null` without type metadata.
 **Service contract:** convert `search == null` → `""` before calling the repo; never pass raw `null`.
-Repos: `StoreRepository.findStores(status, search, pageable)` (status as `String`, service passes `statusFilter.name()`),
-`ProductRepository.findProducts(storeId, active, search, pageable)`,
+Repos: `StoreRepository.findStores(status, search, pageable)` (status bound as the `StoreStatus` **enum**, never
+`String` — a nullable filter must use the entity attribute's own Java type or Hibernate rejects the bind with
+`QueryArgumentException`), `ProductRepository.findProducts(storeId, active, search, pageable)`,
 `CustomerRepository.findCustomers(storeId, active, search, pageable)`. `users` intentionally excluded (low-volume).
 
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`,
@@ -304,8 +305,9 @@ The `store_stations` table holds one row per station; `store_stations.agent_url`
 mapped as `StoreStation.agentUrl`) keeps the agent's last-reported URL so the PWA never scans the LAN. Each
 `StoreStation` is an intra-`stores`-module aggregate member: `@ManyToOne(fetch = LAZY)` to `Store` (same module
 → JPA association per FK Strategy), plus `name`, `agentUrl`, `status` (`StoreStationStatus`: `ACTIVE`/`SUSPENDED`/
-`CANCELED`). `StoreStationRepository` lives in `stores.infrastructure`. Station creation is not yet exposed via
-API — stations are seeded via SQL.
+`CANCELED`). `StoreStationRepository` lives in `stores.infrastructure`. Station creation is
+`POST /api/v1/admin/stores/{storeId}/stations` (`AdminStoreStationController`, `SUPER_ADMIN`) and is
+**quota-gated by the store's subscription tier** — see Subscriptions & Billing Module.
 
 - **Agent ingest:** `PUT /api/v1/agent/stations/{stationId}/url` (`StoreAgentController`) — public route,
   whitelisted in `SecurityConfig` outside `JwtAuthenticationFilter`. Auth is the `X-Agent-Key` header compared
@@ -414,6 +416,80 @@ for owner-facing alerts), publish from the service after the persistence call, a
 `AdminNotificationEventListener` (or a new listener). Route owner alerts through `sendAdminAlert(event.storeId(), text)`
 (channel-aware); route customer alerts through `EvolutionWhatsAppClient.sendMessage(phone, text)` directly. Do **not**
 add new HTTP error handling at the listener layer — the client owns failure isolation.
+
+### Subscriptions & Billing Module
+
+Three SaaS tiers, seeded in `script.sql` SEED DATA and keyed on `subscription_plans.code` (the stable business
+key — `name` is marketing copy and may change):
+
+| `code` | Monthly | Yearly (`10 ×`) | `maxStations` | `includesNotifications` | `includesInvoicing` |
+|--------|---------|-----------------|---------------|-------------------------|---------------------|
+| `STANDARD` | $299.00 | $2,990.00 | 1 | ✗ | ✗ |
+| `PRO` | $499.00 | $4,990.00 | 2 | ✓ | ✗ |
+| `BUSINESS` | $899.00 | $8,990.00 | 5 | ✓ | ✓ |
+
+The `BillingCycle` enum (`subscriptions.domain`: `MONTHLY`, `YEARLY`, column `billing_cycle VARCHAR(20)`) **owns the
+cycle-dependent rules** so they cannot drift across the service and the DTOs: `feeFor(monthlyFee)` (yearly =
+`monthlyFee × 10`, two months free — **computed, never stored**, so a price change reprices both cycles at once),
+`advance(from)` (`plusMonths(1)` / `plusYears(1)`), and `paymentConcept()` (`MONTHLY_FEE` / `YEARLY_FEE`). This is a
+deliberate exception to the bare-enum convention.
+
+**Subscription history is append-only (mandatory).** A store has at most one `ACTIVE` subscription, enforced by the
+partial unique index `idx_one_active_subscription ON subscriptions (store_id) WHERE status = 'ACTIVE'` (declared with
+the `subscriptions` DDL in MODULE 1). Switching or renewing a plan **must not** UPDATE the existing row in place:
+`SubscriptionService.changePlan` marks the current `ACTIVE` row `CANCELED` and INSERTs a new `ACTIVE` one, so past
+pricing and cycle stay auditable next to the payments that reference them. **`saveAndFlush` is load-bearing:**
+Hibernate's action queue executes INSERTs **before** UPDATEs, so the CANCEL must be flushed before the new row is
+saved — otherwise the insert trips `idx_one_active_subscription` → `DataIntegrityViolationException` → 409. Verified
+against PostgreSQL: two `ACTIVE` rows are rejected; cancel-then-insert in one transaction commits to 1 `ACTIVE` +
+1 `CANCELED`.
+
+**Station quota (mandatory).** `SubscriptionService.validateStationQuota(storeId, currentActiveStationsCount)` loads
+the store's `ACTIVE` subscription and throws `InvalidResourceStateException.stationLimitExceeded(max)` when
+`currentActiveStationsCount >= plan.maxStations`. The param is the count that **already** exists — the method reserves
+a slot for the one being added. `StoreStationService.createStation` counts via
+`StoreStationRepository.countByStoreIdAndStatus(storeId, ACTIVE)` and calls it **before** saving. Consequence: a store
+with no `ACTIVE` subscription can no longer create stations at all (404 `subscription_not_found`) — the paid tier is
+the gate. `changePlan` applies the mirror-image downgrade guard: a tier whose cap the store's existing stations
+already overflow is rejected with `station_limit_exceeded`.
+
+`SaasPayment.subscriptionId` is a **plain UUID with no association** (nullable FK, `ON DELETE SET NULL`, never
+traversed — the payment record must outlive the subscription row it points at). `registerMonthlyPayment` remains an
+**in-place** roll-forward of `nextBillingDate` (collecting a period's fee is not a subscription change) and is
+cycle-aware: both the period length and the `concept` come from `BillingCycle`.
+
+- **`GET /api/v1/admin/plans`** (`SubscriptionPlanController`, `SUPER_ADMIN`) — active tier catalog via
+  `SubscriptionPlanRepository.findByActiveTrueOrderByMonthlyFeeAsc()`. Returns `List<SubscriptionPlanResponse>`
+  (adds a computed `yearly_fee`).
+- **`POST /api/v1/admin/stores/{storeId}/subscription`** (`StoreSubscriptionController`, `SUPER_ADMIN`) —
+  `ChangePlanRequest` (`plan_code`, `billing_cycle`). Always **201** (every call creates a row). Unknown or inactive
+  code → 404 `plan_not_found`; over-cap downgrade → 409 `station_limit_exceeded`.
+- **`GET /api/v1/admin/stores/{storeId}/subscription`** (`StoreSubscriptionController`, `SUPER_ADMIN`) — the store's
+  current plan, so the admin UI can show what it is changing *from*. Delegates to the same `getActiveSubscription` the
+  tenant route uses. No `ACTIVE` subscription → 404 `subscription_not_found`, which clients treat as "no plan", not as
+  an error.
+- **`GET /api/v1/stores/me/subscription`** (`MySubscriptionController`, `OWNER`) — tenant-scoped via
+  `SecurityUtils.currentStoreId()`; returns `SubscriptionResponse` carrying the plan entitlements so the PWA can gate
+  features. No `ACTIVE` subscription → 404 `subscription_not_found`.
+- **`GET /api/v1/admin/subscriptions/upcoming-billings`** (`AdminSubscriptionController`, `SUPER_ADMIN`) —
+  `List<UpcomingBillingResponse>`, **not paginated** (the window is only days wide). ACTIVE subscriptions billing
+  within `SubscriptionService.UPCOMING_WINDOW_DAYS` (7), soonest first. **Deliberately unbounded below** so rows that
+  are already past due — still ACTIVE inside the scheduler's `GRACE_DAYS` — stay visible for collection. `amount_due`
+  is `billingCycle.feeFor(plan.monthlyFee)`, **never the raw `monthlyFee`**; the store name and `whatsapp` are
+  batch-joined via `StoreRepository.findAllById` because `Subscription.storeId` is a bare UUID, not an association.
+- **`GET /api/v1/admin/subscriptions/summary`** (`AdminSubscriptionController`, `SUPER_ADMIN`) —
+  `SubscriptionSummaryResponse` KPIs. `tier_distribution` is a `LinkedHashMap` **seeded from the plan catalog at
+  `0L`** in ascending price order, so empty tiers still render and the client needs no second call; tiers that were
+  since deactivated but still carry subscribers are appended. The 7-day count and amount are derived from the **same**
+  query that backs `upcoming-billings`, so the header and the table cannot disagree.
+
+**Live-DB migration:** `script.sql` is an initdb script (runs only on an empty volume), so already-provisioned
+databases need `src/main/resources/migrations/2026-08-10-subscription-tiers.sql` applied by hand — idempotent,
+transactional, and it backfills the legacy `Standard Plan` row onto `PRO` (matching price and features) and renames
+it. Verified end-to-end: legacy schema → migration → `ddl-auto=validate` boots clean.
+`2026-08-11-upcoming-billings-view.sql` follows it: the `v_upcoming_billings` view exposed `monthly_fee` and ignored
+`billing_cycle` (understating a YEARLY subscriber tenfold), and is replaced with `billing_cycle` plus a cycle-aware
+`amount_due`. `DROP`-then-`CREATE`, because `CREATE OR REPLACE VIEW` cannot rename a column.
 
 ### Audit Module
 

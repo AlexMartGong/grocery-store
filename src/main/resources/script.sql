@@ -12,16 +12,22 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- MODULE 1: ADMINISTRATIVE (YOUR SAAS BUSINESS)
 -- =====================================================================
 
--- Subscription plan catalog (one for now, extensible later)
+-- Subscription plan catalog: STANDARD / PRO / BUSINESS tiers.
+-- code is the stable business key the API subscribes stores by (names may change).
+-- max_stations / includes_* are the per-tier entitlements enforced by the app.
 CREATE TABLE subscription_plans
 (
-    id          UUID PRIMARY KEY        DEFAULT gen_random_uuid(),
-    name        VARCHAR(50)    NOT NULL,
-    monthly_fee NUMERIC(10, 2) NOT NULL DEFAULT 499.00,
-    setup_fee   NUMERIC(10, 2) NOT NULL DEFAULT 1490.00,
-    description TEXT,
-    active      BOOLEAN        NOT NULL DEFAULT TRUE,
-    created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    id                     UUID PRIMARY KEY        DEFAULT gen_random_uuid(),
+    code                   VARCHAR(30)    NOT NULL UNIQUE,
+    name                   VARCHAR(50)    NOT NULL,
+    monthly_fee            NUMERIC(10, 2) NOT NULL CHECK (monthly_fee >= 0),
+    setup_fee              NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    max_stations           INTEGER        NOT NULL DEFAULT 1 CHECK (max_stations > 0),
+    includes_notifications BOOLEAN        NOT NULL DEFAULT FALSE,
+    includes_invoicing     BOOLEAN        NOT NULL DEFAULT FALSE,
+    description            TEXT,
+    active                 BOOLEAN        NOT NULL DEFAULT TRUE,
+    created_at             TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
 -- Stores = SaaS clients (tenants)
@@ -56,12 +62,16 @@ CREATE TABLE store_stations
 );
 CREATE INDEX idx_store_stations_store_id ON store_stations (store_id);
 
--- Links a store with a plan and tracks its billing cycle
+-- Links a store with a plan and tracks its billing cycle.
+-- History is append-only: switching or renewing a plan CANCELs the current row and
+-- INSERTs a new one, so past pricing/cycle stays auditable. Never UPDATE in place.
 CREATE TABLE subscriptions
 (
     id                UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
     store_id          UUID        NOT NULL REFERENCES stores (id) ON DELETE RESTRICT,
     plan_id           UUID        NOT NULL REFERENCES subscription_plans (id),
+    billing_cycle     VARCHAR(20) NOT NULL DEFAULT 'MONTHLY'
+        CHECK (billing_cycle IN ('MONTHLY', 'YEARLY')),
     start_date        DATE        NOT NULL DEFAULT CURRENT_DATE,
     next_billing_date DATE        NOT NULL,
     status            VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
@@ -69,20 +79,26 @@ CREATE TABLE subscriptions
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- SaaS payment history (setup fees + monthly fees)
+-- Conditional unique index: only one ACTIVE subscription per store.
+-- Cancel-then-insert must flush the CANCEL first or the new row trips this index.
+CREATE UNIQUE INDEX idx_one_active_subscription
+    ON subscriptions (store_id) WHERE status = 'ACTIVE';
+
+-- SaaS payment history (setup fees + monthly/yearly fees)
 CREATE TABLE saas_payments
 (
-    id             UUID PRIMARY KEY        DEFAULT gen_random_uuid(),
-    store_id       UUID           NOT NULL REFERENCES stores (id) ON DELETE RESTRICT,
-    amount         NUMERIC(10, 2) NOT NULL,
-    concept        VARCHAR(30)    NOT NULL
-        CHECK (concept IN ('SETUP_FEE', 'MONTHLY_FEE')),
-    payment_method VARCHAR(20)
+    id              UUID PRIMARY KEY        DEFAULT gen_random_uuid(),
+    store_id        UUID           NOT NULL REFERENCES stores (id) ON DELETE RESTRICT,
+    subscription_id UUID                    REFERENCES subscriptions (id) ON DELETE SET NULL,
+    amount          NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
+    concept         VARCHAR(30)    NOT NULL
+        CHECK (concept IN ('SETUP_FEE', 'MONTHLY_FEE', 'YEARLY_FEE')),
+    payment_method  VARCHAR(20)
         CHECK (payment_method IS NULL OR payment_method IN ('CASH', 'TRANSFER', 'CARD')),
-    period_start   DATE, -- for monthly fees
-    period_end     DATE,
-    paid_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    notes          TEXT
+    period_start    DATE, -- for monthly/yearly fees
+    period_end      DATE,
+    paid_at         TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    notes           TEXT
 );
 
 -- SaaS platform administrators (no store affiliation)
@@ -283,10 +299,7 @@ CREATE INDEX idx_sale_items_sale ON sale_items (sale_id);
 CREATE INDEX idx_payments_customer ON customer_payments (customer_id, created_at DESC);
 CREATE INDEX idx_notifications_unread ON notifications (store_id) WHERE read_at IS NULL;
 CREATE INDEX idx_subscriptions_billing ON subscriptions (next_billing_date) WHERE status = 'ACTIVE';
-
--- Enforce only one active subscription per store
-CREATE UNIQUE INDEX idx_one_active_subscription
-    ON subscriptions (store_id) WHERE status = 'ACTIVE';
+-- idx_one_active_subscription lives with the subscriptions DDL in MODULE 1.
 
 
 -- =====================================================================
@@ -559,13 +572,16 @@ FROM sales s
          LEFT JOIN users u ON u.id = sc.canceled_by
 ORDER BY sc.created_at DESC;
 
--- Subscriptions due within the next 7 days (for YOU to collect)
+-- Subscriptions due within the next 7 days (for YOU to collect).
+-- amount_due is cycle-aware: a YEARLY subscriber owes 10 x monthly_fee, not one month.
+-- Mirrors SubscriptionService.listUpcomingBillings() / UPCOMING_WINDOW_DAYS -- change both together.
 CREATE OR REPLACE VIEW v_upcoming_billings AS
 SELECT s.store_id,
-       st.name AS store_name,
+       st.name                                            AS store_name,
        st.whatsapp,
        s.next_billing_date,
-       p.monthly_fee
+       s.billing_cycle,
+       CASE WHEN s.billing_cycle = 'YEARLY' THEN p.monthly_fee * 10 ELSE p.monthly_fee END AS amount_due
 FROM subscriptions s
          JOIN stores st ON st.id = s.store_id
          JOIN subscription_plans p ON p.id = s.plan_id
@@ -578,10 +594,20 @@ ORDER BY s.next_billing_date;
 -- SEED DATA
 -- =====================================================================
 
--- Plan base (el ID se generará solo)
-INSERT INTO subscription_plans (name, monthly_fee, setup_fee, description)
-VALUES ('Standard Plan', 499.00, 1490.00,
-        'Inventory, credit tracking and notifications from your phone');
+-- SaaS tier catalog (el ID se generará solo). Re-runnable: keyed on the unique code.
+-- Yearly billing is charged as 10 x monthly_fee (2 months free) -- computed in Java,
+-- not stored, so a monthly_fee change reprices both cycles at once.
+INSERT INTO subscription_plans (code, name, monthly_fee, max_stations, includes_notifications, includes_invoicing,
+                                description)
+VALUES ('STANDARD', 'Standard', 299.00, 1, FALSE, FALSE, 'Basic tier + 1 register station'),
+       ('PRO', 'Pro', 499.00, 2, TRUE, FALSE, 'Includes owner alerts + 2 register stations'),
+       ('BUSINESS', 'Business', 899.00, 5, TRUE, TRUE,
+        'Includes owner alerts, electronic invoicing + 5 register stations')
+ON CONFLICT (code) DO UPDATE SET monthly_fee            = EXCLUDED.monthly_fee,
+                                 max_stations           = EXCLUDED.max_stations,
+                                 includes_notifications = EXCLUDED.includes_notifications,
+                                 includes_invoicing     = EXCLUDED.includes_invoicing,
+                                 description            = EXCLUDED.description;
 
 -- Usuario administrador (el ID se generará solo)
 INSERT INTO admin_users (username, password_hash, full_name, role, active)
