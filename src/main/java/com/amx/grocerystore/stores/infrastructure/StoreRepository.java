@@ -20,7 +20,7 @@ public interface StoreRepository extends JpaRepository<Store, UUID> {
     Page<Store> findByStatus(StoreStatus status, Pageable pageable);
 
     @Query("SELECT s FROM Store s WHERE (:status IS NULL OR s.status = :status) AND (:search = '' OR LOWER(s.name) LIKE LOWER(CONCAT('%', :search, '%')) OR LOWER(s.code) LIKE LOWER(CONCAT('%', :search, '%')))")
-    Page<Store> findStores(@Param("status") String status,
+    Page<Store> findStores(@Param("status") StoreStatus status,
                            @Param("search") String search,
                            Pageable pageable);
 }

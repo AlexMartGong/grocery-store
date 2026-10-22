@@ -47,6 +47,11 @@ public class Subscription {
     private SubscriptionPlan plan;
 
     @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "billing_cycle", nullable = false, length = 20)
+    private BillingCycle billingCycle;
+
+    @NotNull
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
 

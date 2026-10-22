@@ -43,6 +43,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SaasPaymentControllerTest {
 
     private static final UUID STORE_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static final UUID SUBSCRIPTION_ID = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
     private static final String URL = "/api/v1/admin/stores/" + STORE_ID + "/payments";
     private static final String VALID_BODY = """
             {"amount":499.00,"method":"TRANSFER","notes":"Mayo 2026"}
@@ -77,7 +78,7 @@ class SaasPaymentControllerTest {
 
     private SaasPaymentResponse sample() {
         return new SaasPaymentResponse(
-                UUID.randomUUID(), STORE_ID, new BigDecimal("499.00"),
+                UUID.randomUUID(), STORE_ID, SUBSCRIPTION_ID, new BigDecimal("499.00"),
                 SaasPaymentConcept.MONTHLY_FEE, PaymentMethod.TRANSFER,
                 LocalDate.of(2026, 5, 1), LocalDate.of(2026, 6, 1),
                 LocalDate.of(2026, 6, 1), SubscriptionStatus.ACTIVE);
@@ -95,6 +96,7 @@ class SaasPaymentControllerTest {
                         .content(VALID_BODY))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.storeId").value(STORE_ID.toString()))
+                .andExpect(jsonPath("$.subscriptionId").value(SUBSCRIPTION_ID.toString()))
                 .andExpect(jsonPath("$.concept").value("MONTHLY_FEE"))
                 .andExpect(jsonPath("$.subscriptionStatus").value("ACTIVE"))
                 .andExpect(jsonPath("$.nextBillingDate").value("2026-06-01"));

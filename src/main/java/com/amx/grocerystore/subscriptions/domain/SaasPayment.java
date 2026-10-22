@@ -39,6 +39,14 @@ public class SaasPayment {
     @Column(name = "store_id", nullable = false)
     private UUID storeId;
 
+    /**
+     * The subscription this payment settled. Plain UUID, no association: the FK is
+     * nullable with ON DELETE SET NULL and is never traversed — the payment record
+     * must outlive the subscription row it points at.
+     */
+    @Column(name = "subscription_id")
+    private UUID subscriptionId;
+
     @NotNull
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal amount;

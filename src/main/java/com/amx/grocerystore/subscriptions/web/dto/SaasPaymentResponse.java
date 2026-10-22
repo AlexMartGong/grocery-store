@@ -13,6 +13,7 @@ import java.util.UUID;
 public record SaasPaymentResponse(
         UUID id,
         UUID storeId,
+        UUID subscriptionId,
         BigDecimal amount,
         SaasPaymentConcept concept,
         PaymentMethod paymentMethod,
@@ -25,6 +26,7 @@ public record SaasPaymentResponse(
         return new SaasPaymentResponse(
                 payment.getId(),
                 payment.getStoreId(),
+                payment.getSubscriptionId(),
                 payment.getAmount(),
                 payment.getConcept(),
                 payment.getPaymentMethod(),

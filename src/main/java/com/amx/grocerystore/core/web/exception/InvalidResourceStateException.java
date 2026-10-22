@@ -60,4 +60,9 @@ public class InvalidResourceStateException extends RuntimeException {
         return new InvalidResourceStateException("sale_already_canceled",
                 "Sale is already canceled.");
     }
+
+    public static InvalidResourceStateException stationLimitExceeded(int maxStations) {
+        return new InvalidResourceStateException("station_limit_exceeded",
+                "The store's subscription plan allows at most " + maxStations + " active station(s).");
+    }
 }

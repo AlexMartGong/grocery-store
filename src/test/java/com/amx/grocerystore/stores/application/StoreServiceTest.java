@@ -107,15 +107,15 @@ class StoreServiceTest {
     }
 
     @Test
-    void list_withStatus_delegatesFindStores_withStatusName() {
+    void list_withStatus_delegatesFindStores_withEnum() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Store> page = new PageImpl<>(List.of(store(UUID.randomUUID(), "x", StoreStatus.SUSPENDED)));
-        given(storeRepository.findStores("SUSPENDED", "", pageable)).willReturn(page);
+        given(storeRepository.findStores(StoreStatus.SUSPENDED, "", pageable)).willReturn(page);
 
         PageResponse<StoreResponse> response = storeService.list(StoreStatus.SUSPENDED, null, pageable);
 
         assertThat(response.content()).hasSize(1);
-        verify(storeRepository).findStores("SUSPENDED", "", pageable);
+        verify(storeRepository).findStores(StoreStatus.SUSPENDED, "", pageable);
     }
 
     @Test
