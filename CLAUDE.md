@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Role & Context
 
-Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.0.6.
+Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with Spring Boot 4.1.2.
 **Base package:** `com.amx.grocerystore` — entry point `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting), AWS SDK v2 `s3` 2.46.7 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.13 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j `bucket4j_jdk17-core` 8.21.0 (pinned — Boot 4.x does not manage `com.bucket4j`; the plain `bucket4j-core` artifact is frozen at 8.10.1; powers login rate limiting), AWS SDK v2 `s3` 2.57.3 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
 **Tooling:** Maven wrapper (`./mvnw`) for all build/test commands.
 
 ## Build & Development Commands
@@ -23,7 +23,7 @@ Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-
 
 ## Architecture
 
-Java 21 Spring Boot 4.0 app. **Domain-Oriented (Modular) Architecture** — code organized by feature (one aggregate per module), not by technical layer. Each module has `web`, `application`, `domain`, `infrastructure` sub-packages. Constructor injection only. DTOs at the API boundary — never expose JPA entities directly.
+Java 21 Spring Boot 4.1 app. **Domain-Oriented (Modular) Architecture** — code organized by feature (one aggregate per module), not by technical layer. Each module has `web`, `application`, `domain`, `infrastructure` sub-packages. Constructor injection only. DTOs at the API boundary — never expose JPA entities directly.
 
 ### Module Map
 
@@ -259,7 +259,7 @@ DB connection via env vars (defaults to `localhost` dev values): `DB_HOST`, `DB_
 - `AGENT_API_KEY` (default `default-agent-secret`) — bound to `app.security.agent.api-key` via `AgentSecurityProperties`; shared static key for the print-agent bridge.
 - `EVOLUTION_BASE_URL`, `EVOLUTION_APIKEY`, `EVOLUTION_INSTANCE` — Evolution / WhatsApp gateway. (Owner alerts route to the per-store `Store.whatsapp` column — no global phone env var.)
 - `TELEGRAM_BOT_TOKEN` (default empty) — bound to `telegram.bot.token`, used by `TelegramBotClient` for stores with `preferred_admin_channel = 'TELEGRAM'`. Empty token → Telegram sends no-op. Owner alerts route to the per-store `Store.telegramChatId` column — no global chat-id env var.
-- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot — uploads then fail at request time (`StorageConfig.orPlaceholder` substitutes `"unconfigured"` for blank keys; `AwsBasicCredentials` rejects blank).
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot — uploads then fail at request time (`StorageConfig.orPlaceholder` substitutes `"unconfigured"` for a blank account id and blank keys; `AwsBasicCredentials` rejects blank keys and newer AWS SDK releases (verified 2.57.3; 2.46.7 did not) reject the host-less `https://.r2.cloudflarestorage.com` endpoint at `S3Client` build time).
 - `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS`, `CORS_EXPOSED_HEADERS`, `CORS_ALLOW_CREDENTIALS`, `CORS_MAX_AGE` — bound to `app.cors.*`. Dev defaults include `http://localhost:5173`, `https://localhost:5174`, `http://192.168.68.69:5173`.
 
 ## Deployment & CI

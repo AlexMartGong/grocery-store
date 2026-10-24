@@ -7,9 +7,9 @@ Comprehensive instruction file for OpenCode and AI Agent sessions on the `grocer
 ## Role & Context
 
 Act as a Senior Backend Engineer specialized in Java 21 developing the `grocery-store` project — a POS system built with
-Spring Boot 4.0.6.
+Spring Boot 4.1.2.
 **Base package:** `com.amx.grocerystore` — the `@SpringBootApplication` entry point is `GroceryStoreApplication`.
-**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.12 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j-core 8.10.1 (pinned — Boot 4.x does not manage `com.bucket4j`; powers login rate limiting), AWS SDK v2 `s3` 2.46.7 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
+**Stack:** Spring Web MVC, Spring Data JPA (PostgreSQL), Spring Security, Lombok, Bean Validation, JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`), Spring Retry 2.0.13 (pinned — Boot 4.x does not manage `org.springframework.retry`) + `aspectjweaver` (BOM-managed; Boot 4 dropped `spring-boot-starter-aop`, `spring-aop` ships transitively via `spring-context`), bucket4j `bucket4j_jdk17-core` 8.21.0 (pinned — Boot 4.x does not manage `com.bucket4j`; the plain `bucket4j-core` artifact is frozen at 8.10.1; powers login rate limiting), AWS SDK v2 `s3` 2.57.3 (pinned — Boot 4.x does not manage `software.amazon.awssdk`; Cloudflare R2 product-image storage).
 **Tooling:** Use the Maven wrapper (`./mvnw`) for all build and test commands.
 
 ## Build & Development Commands
@@ -28,7 +28,7 @@ Qodana: `profile: qodana.starter`, linter `jetbrains/qodana-jvm-community:2026.1
 
 ## Architecture
 
-Spring Boot 4.0 application (Java 21). **Testing:** JUnit 5 via Spring Boot test starters (JPA test, Security test,
+Spring Boot 4.1 application (Java 21). **Testing:** JUnit 5 via Spring Boot test starters (JPA test, Security test,
 Web MVC test). Lombok annotation processing is configured for both main and test compilation.
 Follow a **Domain-Oriented (Modular) Architecture** — organize code by functional feature (one aggregate per module)
 rather than by technical layer.
@@ -561,8 +561,9 @@ Strictly adhere to SOLID in every implementation:
   — shared static key for the print-agent bridge. `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
   (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to
   `app.storage.r2.*` via `R2StorageProperties`; Cloudflare R2 product-image storage. Empty creds must not fail boot —
-  uploads then fail at request time (`StorageConfig.orPlaceholder` substitutes `"unconfigured"` for blank keys;
-  `AwsBasicCredentials` rejects blank).
+  uploads then fail at request time (`StorageConfig.orPlaceholder` substitutes `"unconfigured"` for a blank account id and
+  blank keys; `AwsBasicCredentials` rejects blank keys and newer AWS SDK releases (verified 2.57.3; 2.46.7
+  did not) reject the host-less `https://.r2.cloudflarestorage.com` endpoint at `S3Client` build time).
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on

@@ -6,6 +6,7 @@ import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.customers.domain.Customer;
 import com.amx.grocerystore.customers.infrastructure.CustomerRepository;
+import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
 import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.domain.UnitOfMeasure;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
@@ -62,6 +63,8 @@ class SaleServiceTest {
     @Mock
     private ProductRepository productRepository;
 
+    @Mock
+    private NotificationRepository notificationRepository;
 
     @InjectMocks
     private SaleService saleService;

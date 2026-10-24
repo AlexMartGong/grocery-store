@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.6</version>
+        <version>4.1.2</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.amx</groupId>
@@ -79,7 +79,7 @@
         <dependency>
             <groupId>org.springframework.retry</groupId>
             <artifactId>spring-retry</artifactId>
-            <version>2.0.12</version>
+            <version>2.0.13</version>
         </dependency>
         <dependency>
             <groupId>org.aspectj</groupId>
@@ -88,11 +88,12 @@
 
         <!-- bucket4j (token-bucket rate limiting for the login endpoints — VULN-04 brute-force
              mitigation). Boot 4 BOM does not manage bucket4j, so the version is pinned here.
-             Pure-Java, no jakarta deps; 8.12+ renamed the artifact to bucket4j_jdk17-core. -->
+             Pure-Java, no jakarta deps. The artifact was renamed bucket4j_jdk17-core after
+             8.10.1 (same io.github.bucket4j packages; the plain bucket4j-core line is frozen). -->
         <dependency>
             <groupId>com.bucket4j</groupId>
-            <artifactId>bucket4j-core</artifactId>
-            <version>8.10.1</version>
+            <artifactId>bucket4j_jdk17-core</artifactId>
+            <version>8.21.0</version>
         </dependency>
 
         <!-- AWS SDK v2 S3 client (Cloudflare R2 storage for product images). Boot 4 BOM
@@ -100,7 +101,7 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
-            <version>2.46.7</version>
+            <version>2.57.3</version>
         </dependency>
 
         <dependency>
