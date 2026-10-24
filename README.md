@@ -1,11 +1,11 @@
 # grocery-store
 
-Multi-tenant POS (Point of Sale) backend for grocery stores. Spring Boot 4.0.6 on Java 21, PostgreSQL.
+Multi-tenant POS (Point of Sale) backend for grocery stores. Spring Boot 4.1.2 on Java 21, PostgreSQL.
 
 ## Stack
 
 - Java 21
-- Spring Boot 4.0.6 (Web MVC, Data JPA, Security)
+- Spring Boot 4.1.2 (Web MVC, Data JPA, Security)
 - PostgreSQL + HikariCP
 - JJWT 0.13.0 (pinned — Spring Boot 4.x does not manage `io.jsonwebtoken`)
 - Lombok, Bean Validation

@@ -19,7 +19,7 @@ public class StorageConfig {
     public S3Client s3Client(R2StorageProperties properties) {
         return S3Client.builder()
                 .endpointOverride(URI.create(
-                        "https://" + properties.accountId() + ".r2.cloudflarestorage.com"))
+                        "https://" + orPlaceholder(properties.accountId()) + ".r2.cloudflarestorage.com"))
                 // R2 ignores the region but the SDK requires one
                 .region(Region.of("auto"))
                 .credentialsProvider(StaticCredentialsProvider.create(
@@ -34,8 +34,10 @@ public class StorageConfig {
 
     /**
      * The app must boot without R2 configured (uploads then fail at request
-     * time), but {@link AwsBasicCredentials} rejects blank keys — substitute
-     * a placeholder so bean creation never fails on empty credentials.
+     * time), but {@link AwsBasicCredentials} rejects blank keys and newer SDK
+     * releases reject a host-less endpoint at build time — substitute a
+     * placeholder so bean creation never fails on an empty account id or
+     * credentials.
      */
     private static String orPlaceholder(String value) {
         return (value == null || value.isBlank()) ? "unconfigured" : value;
