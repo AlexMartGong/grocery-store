@@ -22,7 +22,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-@EnableConfigurationProperties({JwtProperties.class, AppCorsProperties.class, AgentSecurityProperties.class})
+@EnableConfigurationProperties({JwtProperties.class, AppCorsProperties.class, AgentSecurityProperties.class,
+        RefreshTokenProperties.class})
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -60,6 +61,8 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/admin/login").permitAll()
                         .requestMatchers(HttpMethod.PUT, "/api/v1/agent/stations/*/url").permitAll()
                         .requestMatchers("/error").permitAll()

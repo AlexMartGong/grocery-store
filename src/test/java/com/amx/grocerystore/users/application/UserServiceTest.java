@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -55,6 +56,9 @@ class UserServiceTest {
 
     @Mock
     private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private RefreshTokenService refreshTokenService;
 
     @InjectMocks
     private UserService userService;
@@ -395,5 +399,77 @@ class UserServiceTest {
         UserResponse response = userService.provisionUserForStore(targetStore, req);
 
         assertThat(response.username()).isEqualTo("owner1");
+    }
+
+    // ── Refresh-token revocation ───────────────────────────────────────────────
+
+    @Test
+    void update_deactivate_revokesUserRefreshTokens() {
+        UUID id = UUID.randomUUID();
+        User existing = user(id, TENANT_ID, true);
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(existing));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+
+        userService.update(id, new UpdateUserRequest(null, null, false, null));
+
+        assertThat(existing.isActive()).isFalse();
+        verify(refreshTokenService).revokeAllForUser(id);
+    }
+
+    @Test
+    void update_passwordChange_revokesUserRefreshTokens() {
+        UUID id = UUID.randomUUID();
+        User existing = user(id, TENANT_ID, true);
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(existing));
+        given(passwordEncoder.encode("NewPass123")).willReturn("NEW_HASH");
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+
+        userService.update(id, new UpdateUserRequest(null, null, null, "NewPass123"));
+
+        verify(refreshTokenService).revokeAllForUser(id);
+    }
+
+    @Test
+    void update_activateOnly_doesNotRevoke() {
+        UUID id = UUID.randomUUID();
+        User existing = user(id, TENANT_ID, false);
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(existing));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+
+        userService.update(id, new UpdateUserRequest(null, null, true, null));
+
+        verifyNoInteractions(refreshTokenService);
+    }
+
+    @Test
+    void update_nameOrRoleOnly_doesNotRevoke() {
+        UUID id = UUID.randomUUID();
+        User existing = user(id, TENANT_ID, true);
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(existing));
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+
+        userService.update(id, new UpdateUserRequest("Otro Nombre", UserRole.OWNER, null, null));
+
+        verifyNoInteractions(refreshTokenService);
+    }
+
+    @Test
+    void softDelete_active_revokesUserRefreshTokens() {
+        UUID id = UUID.randomUUID();
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(user(id, TENANT_ID, true)));
+
+        userService.softDelete(id);
+
+        verify(refreshTokenService).revokeAllForUser(id);
+    }
+
+    @Test
+    void softDelete_alreadyInactive_doesNotRevoke() {
+        UUID id = UUID.randomUUID();
+        given(userRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(user(id, TENANT_ID, false)));
+
+        userService.softDelete(id);
+
+        verifyNoInteractions(refreshTokenService);
     }
 }

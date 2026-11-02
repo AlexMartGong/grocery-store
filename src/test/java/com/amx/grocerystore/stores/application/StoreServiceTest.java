@@ -6,6 +6,7 @@ import com.amx.grocerystore.core.web.exception.NotFoundException;
 import com.amx.grocerystore.stores.domain.AdminNotificationChannel;
 import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStatus;
+import com.amx.grocerystore.stores.domain.events.StoreDeactivatedEvent;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import com.amx.grocerystore.stores.web.dto.CreateStoreRequest;
 import com.amx.grocerystore.stores.web.dto.StoreResponse;
@@ -16,6 +17,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -30,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,6 +40,9 @@ class StoreServiceTest {
 
     @Mock
     private StoreRepository storeRepository;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private StoreService storeService;
@@ -177,5 +183,98 @@ class StoreServiceTest {
 
         assertThatThrownBy(() -> storeService.softDelete(id))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    // ── Refresh-token revocation trigger (StoreDeactivatedEvent) ─────────────
+
+    private UpdateStoreRequest updateWithStatus(StoreStatus status) {
+        return new UpdateStoreRequest("Tienda", "Dueno", "55512345", null,
+                AdminNotificationChannel.WHATSAPP, "Calle 1", status);
+    }
+
+    @Test
+    void update_activeToSuspended_publishesStoreDeactivated() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.ACTIVE)));
+        given(storeRepository.save(any(Store.class))).willAnswer(inv -> inv.getArgument(0));
+
+        storeService.update(id, updateWithStatus(StoreStatus.SUSPENDED));
+
+        verify(eventPublisher).publishEvent(new StoreDeactivatedEvent(id, StoreStatus.SUSPENDED));
+    }
+
+    @Test
+    void update_activeToCanceled_publishesStoreDeactivated() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.ACTIVE)));
+        given(storeRepository.save(any(Store.class))).willAnswer(inv -> inv.getArgument(0));
+
+        storeService.update(id, updateWithStatus(StoreStatus.CANCELED));
+
+        verify(eventPublisher).publishEvent(new StoreDeactivatedEvent(id, StoreStatus.CANCELED));
+    }
+
+    @Test
+    void update_suspendedToActive_doesNotPublish() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.SUSPENDED)));
+        given(storeRepository.save(any(Store.class))).willAnswer(inv -> inv.getArgument(0));
+
+        storeService.update(id, updateWithStatus(StoreStatus.ACTIVE));
+
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void update_statusUnchanged_doesNotPublish() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.SUSPENDED)));
+        given(storeRepository.save(any(Store.class))).willAnswer(inv -> inv.getArgument(0));
+
+        storeService.update(id, updateWithStatus(StoreStatus.SUSPENDED));
+
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void suspend_publishesStoreDeactivated() {
+        UUID id = UUID.randomUUID();
+        Store existing = store(id, "x", StoreStatus.ACTIVE);
+        given(storeRepository.findById(id)).willReturn(Optional.of(existing));
+
+        storeService.suspend(id);
+
+        assertThat(existing.getStatus()).isEqualTo(StoreStatus.SUSPENDED);
+        verify(eventPublisher).publishEvent(new StoreDeactivatedEvent(id, StoreStatus.SUSPENDED));
+    }
+
+    @Test
+    void activate_doesNotPublish() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.SUSPENDED)));
+
+        storeService.activate(id);
+
+        verifyNoInteractions(eventPublisher);
+    }
+
+    @Test
+    void softDelete_active_publishesStoreDeactivated() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.ACTIVE)));
+
+        storeService.softDelete(id);
+
+        verify(eventPublisher).publishEvent(new StoreDeactivatedEvent(id, StoreStatus.CANCELED));
+    }
+
+    @Test
+    void softDelete_alreadyCanceled_doesNotPublish() {
+        UUID id = UUID.randomUUID();
+        given(storeRepository.findById(id)).willReturn(Optional.of(store(id, "x", StoreStatus.CANCELED)));
+
+        storeService.softDelete(id);
+
+        verifyNoInteractions(eventPublisher);
     }
 }

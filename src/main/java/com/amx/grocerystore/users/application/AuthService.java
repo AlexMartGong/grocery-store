@@ -19,13 +19,17 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AuthService {
 
+    private static final String TOKEN_TYPE = "Bearer";
+
     private final StoreRepository storeRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
 
-    @Transactional(readOnly = true)
-    public LoginResponse login(LoginRequest request) {
+    /** Read-write: a successful login persists a new refresh-token family. */
+    @Transactional
+    public AuthSession login(LoginRequest request, String userAgent) {
         Store store = storeRepository.findByCode(request.storeCode())
                 .orElseThrow(() -> new BadCredentialsException("invalid_credentials"));
 
@@ -41,7 +45,25 @@ public class AuthService {
             throw new BadCredentialsException("invalid_credentials");
         }
 
-        String token = jwtService.generateToken(user);
-        return new LoginResponse(token, "Bearer", jwtService.getExpirationSeconds());
+        String refreshToken = refreshTokenService.issue(user, userAgent);
+        return new AuthSession(accessTokenFor(user), refreshToken);
+    }
+
+    /**
+     * Deliberately NOT {@code @Transactional}: {@link RefreshTokenService#rotate} is the single
+     * transaction boundary and carries the {@code noRollbackFor} that keeps family revocations durable.
+     * The access token is built from the revalidated DB user, so role changes apply on refresh.
+     */
+    public AuthSession refresh(String refreshToken, String userAgent) {
+        RotatedSession rotated = refreshTokenService.rotate(refreshToken, userAgent);
+        return new AuthSession(accessTokenFor(rotated.user()), rotated.refreshToken());
+    }
+
+    public void logout(String refreshToken) {
+        refreshTokenService.revoke(refreshToken);
+    }
+
+    private LoginResponse accessTokenFor(User user) {
+        return new LoginResponse(jwtService.generateToken(user), TOKEN_TYPE, jwtService.getUserExpirationSeconds());
     }
 }

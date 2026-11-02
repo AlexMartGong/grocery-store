@@ -30,6 +30,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final StoreRepository storeRepository;
     private final PasswordEncoder passwordEncoder;
+    private final RefreshTokenService refreshTokenService;
 
     @Transactional
     public UserResponse create(CreateUserRequest request) {
@@ -94,6 +95,10 @@ public class UserService {
         if (request.password() != null) {
             user.setPasswordHash(passwordEncoder.encode(request.password()));
         }
+        // Deactivation or a password change ends every persistent session of this user.
+        if (Boolean.FALSE.equals(request.active()) || request.password() != null) {
+            refreshTokenService.revokeAllForUser(user.getId());
+        }
         return UserResponse.from(userRepository.save(user));
     }
 
@@ -107,6 +112,7 @@ public class UserService {
         }
         user.setActive(false);
         userRepository.save(user);
+        refreshTokenService.revokeAllForUser(user.getId());
     }
 
     private UserResponse persistNewUser(UUID storeId, CreateUserRequest request) {

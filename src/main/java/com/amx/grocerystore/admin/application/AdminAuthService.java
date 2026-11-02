@@ -29,6 +29,6 @@ public class AdminAuthService {
         }
 
         String token = jwtService.generateAdminToken(admin);
-        return new LoginResponse(token, "Bearer", jwtService.getExpirationSeconds());
+        return new LoginResponse(token, "Bearer", jwtService.getAdminExpirationSeconds());
     }
 }

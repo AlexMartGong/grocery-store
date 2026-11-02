@@ -133,6 +133,30 @@ CREATE TABLE users
     UNIQUE (store_id, username)
 );
 
+-- Store-user refresh tokens (persistent sessions; SUPER_ADMIN has none).
+-- Only the SHA-256 hex of the opaque token is stored, never the raw value.
+-- Rotation: each use revokes the row and inserts a child in the same family_id
+-- (replaced_by -> child). Replaying a rotated/revoked token revokes the whole
+-- family. Rows are ephemeral session data, so they cascade with their owner;
+-- a cleanup job purges expired/revoked rows after the retention window.
+CREATE TABLE refresh_tokens
+(
+    id          UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    store_id    UUID        NOT NULL REFERENCES stores (id) ON DELETE CASCADE,
+    token_hash  VARCHAR(64) NOT NULL UNIQUE,
+    family_id   UUID        NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    revoked_at  TIMESTAMPTZ,
+    replaced_by UUID                 REFERENCES refresh_tokens (id) ON DELETE SET NULL,
+    user_agent  VARCHAR(255),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id) WHERE revoked_at IS NULL;
+CREATE INDEX idx_refresh_tokens_store ON refresh_tokens (store_id) WHERE revoked_at IS NULL;
+CREATE INDEX idx_refresh_tokens_family ON refresh_tokens (family_id);
+
 -- Products: ONLY the essentials for fast entry.
 -- Required: name and sale_price. Everything else is optional.
 CREATE TABLE products

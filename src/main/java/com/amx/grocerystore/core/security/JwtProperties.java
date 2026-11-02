@@ -7,11 +7,16 @@ import org.springframework.validation.annotation.Validated;
 
 import java.util.Base64;
 
+/**
+ * @param expirationMinutes      store-user (OWNER/CASHIER) access-token lifetime — short, renewed via refresh cookie
+ * @param adminExpirationMinutes SUPER_ADMIN access-token lifetime — admins have no refresh token
+ */
 @Validated
 @ConfigurationProperties(prefix = "app.security.jwt")
 public record JwtProperties(
         @NotBlank String secret,
         @Min(1) long expirationMinutes,
+        @Min(1) long adminExpirationMinutes,
         @NotBlank String issuer
 ) {
     public JwtProperties {

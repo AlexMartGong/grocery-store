@@ -45,7 +45,7 @@ One aggregate per module, all under `com.amx.grocerystore.<module>.domain`:
 | `admin` | `AdminUser` |
 | `stores` | `Store`, `StoreStation` |
 | `subscriptions` | `SubscriptionPlan`, `Subscription`, `SaasPayment` (3 tiers + billing cycles — see Subscriptions & Billing Module) |
-| `users` | `User` |
+| `users` | `User`, `RefreshToken` (store-user sessions — see Auth Architecture) |
 | `products` | `Product` |
 | `customers` | `Customer`, `CustomerPayment` |
 | `sales` | `Sale`, `SaleItem`, `SaleCancellation` |
@@ -61,8 +61,8 @@ Two separate auth flows share the same JWT secret and filter:
 
 | Actor | Endpoint | Token claims | Spring principal |
 |-|-|-|-|
-| Store users | `POST /api/v1/auth/login` | `storeId`, `userId`, `role` (`OWNER`/`CASHIER`) | `UserPrincipal` → `TenantAuthenticationToken` |
-| SaaS admins | `POST /api/v1/admin/login` | `adminId`, `role` (`SUPER_ADMIN`) | `AdminPrincipal` → `AdminAuthenticationToken` |
+| Store users | `POST /api/v1/auth/login` (+ `/refresh`, `/logout`) | `storeId`, `userId`, `role` (`OWNER`/`CASHIER`) — 60 min, renewed via refresh cookie | `UserPrincipal` → `TenantAuthenticationToken` |
+| SaaS admins | `POST /api/v1/admin/login` | `adminId`, `role` (`SUPER_ADMIN`) — 480 min, no refresh token | `AdminPrincipal` → `AdminAuthenticationToken` |
 
 `JwtAuthenticationFilter` distinguishes by presence of `adminId` claim. Never add `storeId` to admin tokens.
 
@@ -74,13 +74,76 @@ Rejection delegates to `JwtAuthenticationEntryPoint`, which writes a JSON `Error
 The filter throws `AccountInactiveException(code)` for revoked state; claim/signature parse failures throw
 `InsufficientAuthenticationException("invalid_token")`.
 
-**Login rate limiting (mandatory):** `AuthRateLimitFilter` (`core.security`, `OncePerRequestFilter`) sits ahead of
+**Auth rate limiting (mandatory):** `AuthRateLimitFilter` (`core.security`, `OncePerRequestFilter`) sits ahead of
 `JwtAuthenticationFilter` (`addFilterBefore(authRateLimitFilter, JwtAuthenticationFilter.class)`) and acts **only** on
-`POST /api/v1/auth/login` + `POST /api/v1/admin/login` (`shouldNotFilter` skips everything else). Per-IP token bucket
-(bucket4j, keyed by `request.getRemoteAddr()`): 10 attempts/minute, greedy refill. Overflow short-circuits with 429
+`POST /api/v1/auth/login` + `POST /api/v1/admin/login` (one shared login bucket per IP: 10 attempts/minute) and `POST
+/api/v1/auth/refresh` (separate bucket per IP: 30 attempts/minute — looser, a healthy client refreshes ~hourly, and
+refresh traffic never eats the login budget). Logout and everything else are skipped by `shouldNotFilter`. bucket4j
+token buckets with greedy refill, keyed by `request.getRemoteAddr()`. Overflow short-circuits with 429
 `too_many_requests` + `Retry-After: 60` (writes `ErrorResponse` via the Jackson `ObjectMapper`, never calls the chain).
-Buckets live in an in-memory `ConcurrentHashMap` — `getRemoteAddr()` is the proxy IP behind a reverse proxy;
-`X-Forwarded-For` parsing + distributed/Redis-backed buckets are a future hardening, not yet wired.
+**Real client IP:** `server.forward-headers-strategy=native` makes Tomcat's `RemoteIpValve` honour
+`X-Forwarded-For`/`X-Forwarded-Proto` only from internal proxies (default regex: 10/8, 172.16/12, 192.168/16, 127/8 —
+the Docker bridge gateway Caddy's traffic arrives from), and Caddy overwrites any client-supplied `X-Forwarded-For`, so
+buckets are per real client. Buckets live in an in-memory `ConcurrentHashMap` — distributed/Redis-backed buckets are a
+future hardening, not yet wired.
+
+**Persistent sessions — store-user refresh tokens (OWNER/CASHIER only; SUPER_ADMIN has none and keeps its single
+long-lived access token):**
+- **Lifetimes:** store-user access token `JWT_EXPIRATION_MINUTES` (default **60**); admin access token
+  `JWT_ADMIN_EXPIRATION_MINUTES` (default **480**) — split in `JwtProperties` (`expirationMinutes` /
+  `adminExpirationMinutes`) and `JwtService` (`getUserExpirationSeconds()` / `getAdminExpirationSeconds()`). Claims
+  unchanged.
+- **Storage (`users` module):** `RefreshToken` entity (`users.domain`) ↔ `refresh_tokens` (`script.sql` MODULE 2). The
+  raw value is 32 `SecureRandom` bytes (256 bits, Base64URL) handed out exactly once; **only its SHA-256 hex
+  (`token_hash`, UNIQUE) is persisted — never the raw value**. `user_id`/`store_id`/`replaced_by` are plain UUIDs;
+  `replaced_by` is a self-FK `ON DELETE SET NULL`; `user_agent` truncated to 255.
+- **Cookie only (`users.web.RefreshTokenCookieFactory`):** `refresh_token`, `HttpOnly`, `Secure`
+  (`REFRESH_COOKIE_SECURE`, default `true` — `false` only for LAN dev over plain http), `SameSite=Lax`,
+  `Path=/api/v1/auth`, persistent `Max-Age = REFRESH_TOKEN_DAYS` (default 60), host-only on `api.ventacore.app` (no
+  `Domain` — frontend `https://ventacore.app` and API `https://api.ventacore.app` share the registrable domain
+  `ventacore.app`, i.e. same-site, so `Lax` cookies travel on `fetch`). Never in a JSON body; no rememberMe option.
+  Deletion cookie repeats name/path/attributes with `Max-Age=0`.
+- **Rotation (`RefreshTokenService.rotate`):** row looked up by hash with `@Lock(PESSIMISTIC_WRITE)` (`SELECT … FOR
+  UPDATE` serializes concurrent refreshes) → if revoked: reuse check (below) → if expired: `invalid_refresh_token`
+  (family untouched) → revalidates exactly like `JwtAuthenticationFilter` (user exists, `active`, `user.storeId ==
+  token.storeId` else `user_inactive`; store exists and `ACTIVE` else `store_inactive`; both revoke the family first) →
+  inserts a child in the same `family_id` with a **sliding** `expires_at = now + REFRESH_TOKEN_DAYS` and marks the
+  parent `revoked_at = now`, `replaced_by = child`. The new access token is built from the **freshly loaded DB `User`**
+  (role changes apply on refresh).
+- **Reuse detection:** presenting a rotated/revoked token revokes the **whole family** (`revokeFamily`) and returns 401
+  `refresh_token_reused` (`log.warn` with family + user). **Grace window** (`app.security.refresh.reuse-grace-seconds`,
+  30): a token rotated < 30s ago whose child (locked) was **never used** is the multi-tab / lost-mobile-response race,
+  not theft — it re-rotates (unused child revoked, parent and old child point to the newest token) instead of revoking
+  the family. Tokens revoked by logout/deactivation have no `replaced_by` and never qualify.
+- **Transaction trap (mandatory):** `rotate` is the **single** transaction boundary of the refresh flow and carries
+  `@Transactional(noRollbackFor = {RefreshTokenException.class, AccountInactiveException.class})` so the family
+  revocation it performs before throwing **commits**. `AuthService.refresh` is deliberately **not** `@Transactional` —
+  wrapping `rotate` in an outer tx without the same `noRollbackFor` marks it rollback-only and silently loses the
+  revocation. `AuthService.login` is read-write `@Transactional` (it INSERTs the first token of a new family per
+  login/device). Verified against PostgreSQL: replay → 401 → 0 active rows in the family.
+- **Revocation:** `UserService.update` (`active=false` **or** a password change) and `softDelete` →
+  `RefreshTokenService.revokeAllForUser`. A store leaving `ACTIVE` (`StoreService.update` on a status transition to
+  `SUSPENDED`/`CANCELED`, `suspend` — also hit by `SubscriptionBillingScheduler` — and `softDelete`) publishes
+  `StoreDeactivatedEvent` (`stores.domain.events`), consumed by `users.application.StoreDeactivationListener` →
+  `revokeAllForStore`. That listener is a deliberate **synchronous `@EventListener`** (not the async `AFTER_COMMIT`
+  pattern of Notifications): it runs inside the publisher's tx so revocation is atomic with the status change, and the
+  event keeps `stores` from depending on `users` (`users` already depends on `stores`). Bulk revocations are
+  `@Modifying` JPQL **without `clearAutomatically`** — clearing would drop the caller's dirty `Store`/`User` changes.
+- **Cleanup:** `RefreshTokenCleanupScheduler` (`@Scheduled(cron = "0 30 3 * * ?")`) → `purgeStale()` deletes rows
+  expired **or** revoked more than `app.security.refresh.cleanup-retention-days` (30) ago. Recently revoked rows are
+  kept on purpose — they are what lets a replayed stolen token trigger reuse detection.
+- **Filter skip:** `JwtAuthenticationFilter.shouldNotFilter` skips `POST /api/v1/auth/{login,refresh,logout}` so a
+  client attaching its expired access token to `/refresh` is never rejected with `invalid_token` (admin login path
+  untouched). `SecurityConfig` permits `POST /api/v1/auth/refresh` + `/logout`.
+- **CORS / CSRF:** the cookie requires `app.cors.allow-credentials=true` (default), which `AppCorsProperties` already
+  refuses to combine with a wildcard origin — `CORS_ALLOWED_ORIGINS` must list the exact frontend origin — production
+  `https://ventacore.app` (verified, see Refresh-token rollout). Spring's `CorsFilter` rejects (403) actual requests
+  from non-allowed `Origin`s before the controller, which together with `SameSite=Lax` blocks cross-site refresh/logout.
+- **Frontend contract:** `credentials: 'include'` on login, refresh **and** logout (otherwise the browser drops
+  `Set-Cookie` on the cross-origin response); call refresh on app boot and on a 401 `invalid_token`, **single-flight**;
+  a 401 from refresh → login screen. Dev: `http://localhost:5173` → `http://localhost:8080` works (localhost is a secure
+  context); LAN `http://192.168.68.x` needs `REFRESH_COOKIE_SECURE=false`; `https://localhost:5174` →
+  `http://localhost:8080` is schemeful cross-site (cookie not sent).
 
 ### Exception Handling
 
@@ -101,6 +164,8 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `InvalidFileException` | 400 | from `ex.getCode()` (`file_required`, `image_type_not_allowed`, `image_too_large`) |
 | `MaxUploadSizeExceededException` | 400 | `image_too_large` (container multipart-limit backstop) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
+| `RefreshTokenException` | 401 | from `ex.getCode()` (`invalid_refresh_token` — missing/unknown/expired; `refresh_token_reused` — replayed rotated/revoked token, family revoked) |
+| `AccountInactiveException` (outside the filter, e.g. on refresh) | 401 | from `ex.getCode()` (`user_inactive` / `store_inactive`) |
 | Rate-limit filter (`AuthRateLimitFilter`) | 429 | `too_many_requests` (+ `Retry-After: 60`) |
 | Filter-layer (via entry point) | 401 | `invalid_token` / `user_inactive` / `store_inactive` / `admin_inactive` |
 
@@ -173,6 +238,19 @@ Repos: `StoreRepository.findStores(status, search, pageable)` (status bound as t
 **`UnitOfMeasure` enum:** `PIECE`, `KILO` — colocated in `products.domain`, mapped `@Enumerated(EnumType.STRING)`,
 column `unit_of_measure VARCHAR(10)`.
 
+**Store-user auth endpoints:**
+- **`POST /api/v1/auth/login`** (`AuthController`, public) — store-user login. Body: `LoginResponse` (`token`,
+  `tokenType`, `expiresInSeconds` = user lifetime). Also sets the `refresh_token` cookie (new family per login/device;
+  `User-Agent` stored). Admin login (`POST /api/v1/admin/login`) is unchanged and never sets a cookie.
+- **`POST /api/v1/auth/refresh`** (`AuthController`, public, rate-limited 30/min/IP) — reads the `refresh_token` cookie,
+  rotates it (see Auth Architecture) and returns a new `LoginResponse` + a new cookie. Missing/unknown/expired → 401
+  `invalid_refresh_token`; replayed rotated/revoked token → 401 `refresh_token_reused` (family revoked); inactive
+  user/store → 401 `user_inactive`/`store_inactive` (family revoked). The cookie is not cleared on failure (harmless —
+  the next login overwrites it).
+- **`POST /api/v1/auth/logout`** (`AuthController`, public) — revokes the presented refresh token if still active and
+  returns **204 + deletion cookie** — always, even with a missing/unknown/already-revoked cookie (idempotent). The
+  access token simply expires (≤60 min).
+
 **Admin provisioning:** `POST /api/v1/admin/stores/{storeId}/users` (`AdminUserProvisioningController`) — `SUPER_ADMIN`
 only. Bootstraps the initial `OWNER` for a store. Calls `UserService.provisionUserForStore(storeId, request)`, which
 takes `storeId` from the path (not the principal) and enforces: store exists, `store.status == ACTIVE`
@@ -201,7 +279,9 @@ strings. Use `InvalidResourceStateException` for precondition failures on existi
 disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
 `DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing). `InvalidFileException` (400)
 covers rejected multipart uploads (empty file, disallowed MIME type, oversize) — factories `emptyFile()`,
-`imageTypeNotAllowed()`, `imageTooLarge()`.
+`imageTypeNotAllowed()`, `imageTooLarge()`. `RefreshTokenException` (401) covers rejected store-user refresh tokens —
+factories `invalid()` (`invalid_refresh_token`) and `reused()` (`refresh_token_reused`); thrown only after any family
+revocation has been made durable (`noRollbackFor` on `RefreshTokenService.rotate`).
 
 **Customer payment endpoint:** `POST /api/v1/customers/{id}/payments` (`OWNER`/`CASHIER`) — register a credit
 repayment via `CreatePaymentRequest(amount @Positive)`. Returns 201 + `CustomerPaymentResponse`. DB trigger
@@ -330,7 +410,9 @@ Domain events (`<module>.domain.events.*Event` records) are published by service
 `@Retryable` deadlock retry — never emits a phantom or duplicate alert. Listeners must treat the business outcome as
 final and never re-throw to the producer. **Caveat:** `@TransactionalEventListener` silently drops events published with
 **no active transaction** (`fallbackExecution` left default `false`); every current publisher is `@Transactional`, so
-keep new publishers transactional too. Current publishers:
+keep new publishers transactional too. **Exception:** `StoreDeactivatedEvent` is consumed by a synchronous in-tx
+`@EventListener` (`StoreDeactivationListener`, refresh-token revocation) — security side effects that must commit
+atomically with the change are the only valid use of that pattern. Current publishers:
 - `CashShiftService.close` → `ShiftClosedEvent(CashShiftResponse)`.
 - `CustomerService.registerPayment` → `CustomerPaymentEvent(CustomerPaymentResponse, customerName, customerPhone)`.
 - `SaleService.createSale` → `LowStockEvent(productName, remainingStock, minStock)` per pending low-stock notification, parsed from `notifications` rows after the sale persists.
@@ -491,6 +573,15 @@ it. Verified end-to-end: legacy schema → migration → `ddl-auto=validate` boo
 `billing_cycle` (understating a YEARLY subscriber tenfold), and is replaced with `billing_cycle` plus a cycle-aware
 `amount_due`. `DROP`-then-`CREATE`, because `CREATE OR REPLACE VIEW` cannot rename a column.
 
+**Live-DB migration (refresh tokens):** provisioned databases need
+`src/main/resources/migrations/2026-11-01-refresh-tokens.sql` applied by hand **before** deploying the version that maps
+`RefreshToken` — `ddl-auto=validate` fails boot on a missing table (= downtime), and `deploy.yml` does not ship
+`migrations/`: `scp` the file, then `docker exec -i ventacore-db psql -U postgres -d grocerystore -v ON_ERROR_STOP=1 <
+2026-11-01-refresh-tokens.sql`. Idempotent (`IF NOT EXISTS`) + transactional. Verified: legacy schema → migration ×2 →
+`ddl-auto=validate` boots clean, and the resulting table is identical to a fresh `script.sql`. **Rollout:** follow the
+official order in Deployment & CI → *Refresh-token rollout*. Note: the `2026-08-10`/`2026-08-11` migration files
+referenced in the Subscriptions section were never committed; `migrations/` now exists with the refresh-token file only.
+
 ### Audit Module
 
 General audit trail for critical admin actions. The `audit` module holds one aggregate, `AuditLog` (`audit.domain`).
@@ -555,8 +646,11 @@ Strictly adhere to SOLID in every implementation:
   pool — and `leak-detection-threshold=60000` — a connection held >60s logs a stack trace to surface leaked/un-closed
   connections. Keep both set; never widen the pool to mask a slow query.
 - **Required env vars (boot fails without):** `JWT_SECRET` — Base64-encoded, must decode to ≥32 bytes for HS256
-  (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `480`); issuer hardcoded `grocery-store`
-  via `app.security.jwt.issuer`. Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.
+  (validated in `JwtProperties`). Optional: `JWT_EXPIRATION_MINUTES` (default `60`, store-user access token) and
+  `JWT_ADMIN_EXPIRATION_MINUTES` (default `480`, SUPER_ADMIN — no refresh token); issuer hardcoded `grocery-store`
+  via `app.security.jwt.issuer`. `REFRESH_TOKEN_DAYS` (default `60`, sliding) and `REFRESH_COOKIE_SECURE` (default
+  `true`; `false` only for LAN dev over plain http) — bound to `app.security.refresh.*` via `RefreshTokenProperties`
+  (`reuse-grace-seconds` 30 and `cleanup-retention-days` 30 have no env vars). Evolution/WhatsApp and Telegram (`TELEGRAM_BOT_TOKEN`) env vars listed in the Notifications section above.
   `AGENT_API_KEY` (default `default-agent-secret`, bound to `app.security.agent.api-key` via `AgentSecurityProperties`)
   — shared static key for the print-agent bridge. `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
   (default empty), `R2_BUCKET_NAME` (default `ventacore-products`), `R2_PUBLIC_URL` (default empty) — bound to
@@ -587,13 +681,52 @@ Strictly adhere to SOLID in every implementation:
 - **Build steps (runner):** `actions/checkout@v4` → `actions/setup-java@v4` (JDK 21 Temurin, `cache: maven`) → `chmod +x ./mvnw` → `./mvnw clean package -DskipTests`.
 - **Transfer:** `appleboy/scp-action@v0.1.7` copies `target/*.jar,Dockerfile,docker-compose.yml,.dockerignore,src/main/resources/script.sql` to `/opt/grocery-store` (`strip_components: 0` keeps relative paths — jar lands at `target/*.jar` matching the Dockerfile `COPY`, `script.sql` keeps the path the compose volume mount expects; `overwrite: true`).
 - **Deploy:** `appleboy/ssh-action@v1.2.0` (secrets `SERVER_IP`, `SERVER_USER`, `SSH_PRIVATE_KEY`) runs on the VPS: `cd /opt/grocery-store` → `docker compose up -d --build` → `docker image prune -f`. **No `git pull` on the VPS** — deploys no longer need the server clone to be current.
-- **Server prerequisites (not in workflow):** `/opt/grocery-store` exists with `.env` present (gitignored — compose reads it); deploy user has docker permissions. Host Caddy keeps proxying `localhost:8080` (compose maps `8080:8080`).
+- **Server prerequisites (not in workflow):** `/opt/grocery-store` exists with `.env` present (gitignored — compose reads it); deploy user has docker permissions. Host Caddy proxies `https://api.ventacore.app` → `127.0.0.1:8080` (compose publishes the app on loopback only — see Docker / Compose).
+
+### Refresh-token rollout (official order — never merge before step 1)
+
+Production: frontend `https://ventacore.app` (Cloudflare-proxied), API `https://api.ventacore.app` (DNS-only A record →
+VPS `152.53.209.145`, host Caddy → `127.0.0.1:8080`).
+1. **Migration first, by hand, before merging to `master`:** `scp
+   src/main/resources/migrations/2026-11-01-refresh-tokens.sql` to the VPS, then `docker exec -i ventacore-db psql -U
+   postgres -d grocerystore -v ON_ERROR_STOP=1 < 2026-11-01-refresh-tokens.sql`. `ddl-auto=validate` refuses to boot
+   without `refresh_tokens`, and `deploy.yml` does not ship `migrations/`.
+2. **Deploy the backend with `JWT_EXPIRATION_MINUTES=480` explicit in the VPS `.env`.** Compose now defaults to `60`, so
+   the line must stay. Harmless: a PWA that does not send `credentials: 'include'` simply ignores the cookie, and the
+   admin flow is unchanged. This deploy also recreates `ventacore-app` with the loopback-only port.
+3. **Ship the PWA refresh handling** (see *Frontend contract* in Auth Architecture).
+4. **Only then set `JWT_EXPIRATION_MINUTES=60`** and `docker compose up -d`. Flipping earlier logs every cashier out
+   hourly instead of daily.
+
+**Validated against production (2026-11-01):** `ventacore.app` and `api.ventacore.app` share the registrable domain
+`ventacore.app` (not on the Public Suffix List) → same-site, so the host-only `SameSite=Lax` cookie travels on `fetch`;
+`.app` is HSTS-preloaded, so `Secure` is always satisfied. A preflight from `https://ventacore.app` returns
+`Access-Control-Allow-Origin: https://ventacore.app` + `Access-Control-Allow-Credentials: true` (the VPS
+`CORS_ALLOWED_ORIGINS` is already correct; a foreign origin gets 403). Caddy forwards `/api/v1/**` without stripping the
+prefix (Spring's `/api/v1/**` CORS mapping answers), so the cookie's `Path=/api/v1/auth` matches. `api.ventacore.app` is
+**not** behind the Cloudflare proxy, so Caddy sees real client IPs and sets `X-Forwarded-For` itself (overwriting any
+client-supplied value) → per-client rate-limit buckets. If the API record is ever switched to proxied (orange cloud),
+configure Caddy `trusted_proxies` with Cloudflare's ranges plus `client_ip_headers CF-Connecting-IP`, or every bucket
+collapses onto Cloudflare edge IPs. `www.ventacore.app` currently answers Cloudflare 522 — if the PWA is ever served
+there, add it to `CORS_ALLOWED_ORIGINS` or redirect it to the apex.
+
+**Post-deploy checks:** `curl -si -X POST https://api.ventacore.app/api/v1/auth/logout` → `204` + `Set-Cookie:
+refresh_token=; Path=/api/v1/auth; Max-Age=0; …; Secure; HttpOnly; SameSite=Lax`. Real client IP: 11 logins in a minute
+from one network → `429`, while another network still logs in. `curl -m 5 http://152.53.209.145:8080/` from outside must
+fail (port no longer public).
 
 ### Docker / Compose (local + VPS deploy)
 
 Root `Dockerfile` + `docker-compose.yml`; env template `.env.example` (copy to `.env` — gitignored, never commit).
 - **Dockerfile:** **single-stage runtime-only** `eclipse-temurin:21-jre-alpine` — expects a pre-built jar in `target/` (CI builds it on the runner; locally run `./mvnw package -DskipTests` first). `WORKDIR /app`, non-root user `ventacore`, `COPY target/*.jar app.jar` (glob skips `*.jar.original`), `chown -R ventacore:ventacore /app` + `USER ventacore`, `EXPOSE 8080`, entrypoint `java -XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -jar app.jar`. `.dockerignore` uses `target/*` + `!target/*.jar` — only the runnable jar enters the context; VCS/IDE dirs and `.env*` stay out.
-- **Compose services** (network `ventacore-net` bridge): `db` = `postgres:16-alpine` (container `ventacore-db`, volume `postgres_data` → fixed name `ventacore_postgres_data`, `pg_isready` healthcheck 5s×5); `app` builds from root Dockerfile (container `ventacore-app`, `8080:8080` — host Caddy keeps proxying `localhost:8080`), `depends_on: db: condition: service_healthy`, passes all `DB_*`/`JWT_*`/`AGENT_API_KEY`/`EVOLUTION_*`/`TELEGRAM_BOT_TOKEN`/`R2_*`/`CORS_ALLOWED_ORIGINS` env vars from `.env` with `DB_HOST=db`. `db` publishes `127.0.0.1:5432:5432` — loopback-only on the host, for SSH-tunnel DB access (`ssh -L 5432:127.0.0.1:5432 user@vps`); never exposed publicly. Note: still occupies host port 5432, so `docker compose up` clashes on machines running a host Postgres.
+- **Compose services** (network `ventacore-net` bridge): `db` = `postgres:16-alpine` (container `ventacore-db`, volume `postgres_data` → fixed name `ventacore_postgres_data`, `pg_isready` healthcheck 5s×5); `app` builds from root Dockerfile (container `ventacore-app`, `127.0.0.1:8080:8080` — loopback-only, see **App port** below), `depends_on: db: condition: service_healthy`, passes all `DB_*`/`JWT_*` (incl. `JWT_ADMIN_EXPIRATION_MINUTES`)/`REFRESH_TOKEN_DAYS`/`REFRESH_COOKIE_SECURE`/`AGENT_API_KEY`/`EVOLUTION_*`/`TELEGRAM_BOT_TOKEN`/`R2_*`/`CORS_ALLOWED_ORIGINS` env vars from `.env` with `DB_HOST=db`. `db` publishes `127.0.0.1:5432:5432` — loopback-only on the host, for SSH-tunnel DB access (`ssh -L 5432:127.0.0.1:5432 user@vps`); never exposed publicly. Note: still occupies host port 5432, so `docker compose up` clashes on machines running a host Postgres.
+- **App port is loopback-only (mandatory):** `app` publishes `127.0.0.1:8080:8080`, never `8080:8080`. Docker writes its
+  own iptables rules and **bypasses `ufw`**, so a `0.0.0.0` binding exposes 8080 to the internet whatever the firewall
+  says — skipping Caddy's TLS and, with `server.forward-headers-strategy=native`, letting a client reach Tomcat directly
+  with a forged `X-Forwarded-For`. Host Caddy reaches `127.0.0.1:8080`; Docker binds IPv4 loopback only, so keep the
+  Caddyfile upstream at `127.0.0.1:8080` rather than `localhost:8080` (which may try `::1` first). Same rule as `db` on
+  `127.0.0.1:5432`. Local dev side effect: the compose API is reachable at `http://localhost:8080` but no longer from
+  other LAN devices — use `./mvnw spring-boot:run` for phone/LAN testing.
 - **Schema init (critical):** `ddl-auto=validate` never creates schema, so compose mounts `./src/main/resources/script.sql` → `/docker-entrypoint-initdb.d/01-schema.sql:ro` — Postgres runs it **only on an empty volume**; a fresh stack boots fully initialized. Schema changes after volume creation still need manual `ALTER`/`psql` (initdb scripts don't re-run).
 - **Compose default DB name is `grocerystore`** (`${DB_NAME:-grocerystore}`) — differs from the app's bare fallback `grocery_store`; harmless because compose passes `DB_NAME` to both containers. Keep `.env` values authoritative.
 - **Usage:** `./mvnw package -DskipTests` then `docker compose up -d --build` (runtime-only Dockerfile needs the jar pre-built); validate config `docker compose config -q`. CI builds the jar on the runner and SCPs artifacts to the VPS (see Deployment & CI above) — the bare-jar/systemd flow is retired.
