@@ -46,7 +46,7 @@ public class JwtService {
 
     public String generateAdminToken(AdminUser admin) {
         Instant now = Instant.now();
-        Instant exp = now.plus(properties.expirationMinutes(), ChronoUnit.MINUTES);
+        Instant exp = now.plus(properties.adminExpirationMinutes(), ChronoUnit.MINUTES);
         return Jwts.builder()
                 .issuer(properties.issuer())
                 .subject(admin.getUsername())
@@ -66,7 +66,11 @@ public class JwtService {
                 .parseSignedClaims(token);
     }
 
-    public long getExpirationSeconds() {
+    public long getUserExpirationSeconds() {
         return properties.expirationMinutes() * 60L;
+    }
+
+    public long getAdminExpirationSeconds() {
+        return properties.adminExpirationMinutes() * 60L;
     }
 }

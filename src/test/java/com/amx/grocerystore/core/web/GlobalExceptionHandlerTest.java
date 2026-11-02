@@ -1,6 +1,8 @@
 package com.amx.grocerystore.core.web;
 
+import com.amx.grocerystore.core.security.AccountInactiveException;
 import com.amx.grocerystore.core.web.exception.InvalidFileException;
+import com.amx.grocerystore.core.web.exception.RefreshTokenException;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,9 +89,45 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.error").value("image_too_large"));
     }
 
+    @Test
+    void invalidRefreshToken_returns401WithCode() throws Exception {
+        mvc.perform(post("/throw/refresh-invalid"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("invalid_refresh_token"));
+    }
+
+    @Test
+    void reusedRefreshToken_returns401WithCode() throws Exception {
+        mvc.perform(post("/throw/refresh-reused"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_reused"));
+    }
+
+    @Test
+    void accountInactive_returns401KeepingFilterCode() throws Exception {
+        mvc.perform(post("/throw/account-inactive"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("store_inactive"));
+    }
+
     @RestController
     @RequestMapping("/throw")
     static class ThrowingController {
+
+        @PostMapping("/refresh-invalid")
+        public void refreshInvalid() {
+            throw RefreshTokenException.invalid();
+        }
+
+        @PostMapping("/refresh-reused")
+        public void refreshReused() {
+            throw RefreshTokenException.reused();
+        }
+
+        @PostMapping("/account-inactive")
+        public void accountInactive() {
+            throw new AccountInactiveException("store_inactive");
+        }
 
         @PostMapping("/invalid-file")
         public void invalidFile() {

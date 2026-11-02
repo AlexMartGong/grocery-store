@@ -8,6 +8,7 @@ import com.amx.grocerystore.stores.domain.Store;
 import com.amx.grocerystore.stores.domain.StoreStation;
 import com.amx.grocerystore.stores.domain.StoreStationStatus;
 import com.amx.grocerystore.stores.domain.StoreStatus;
+import com.amx.grocerystore.stores.domain.events.StoreDeactivatedEvent;
 import com.amx.grocerystore.stores.infrastructure.StoreRepository;
 import com.amx.grocerystore.stores.infrastructure.StoreStationRepository;
 import com.amx.grocerystore.stores.web.dto.CreateStoreRequest;
@@ -16,6 +17,7 @@ import com.amx.grocerystore.stores.web.dto.StoreResponse;
 import com.amx.grocerystore.stores.web.dto.StoreStationResponse;
 import com.amx.grocerystore.stores.web.dto.UpdateStoreRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,7 @@ public class StoreService {
 
     private final StoreRepository storeRepository;
     private final StoreStationRepository storeStationRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public StoreResponse create(CreateStoreRequest request) {
@@ -82,8 +85,13 @@ public class StoreService {
         store.setTelegramChatId(request.telegramChatId());
         store.setPreferredAdminChannel(request.preferredAdminChannel());
         store.setAddress(request.address());
+        StoreStatus previousStatus = store.getStatus();
         store.setStatus(request.status());
-        return StoreResponse.from(storeRepository.save(store));
+        StoreResponse response = StoreResponse.from(storeRepository.save(store));
+        if (previousStatus != store.getStatus()) {
+            publishIfDeactivated(store);
+        }
+        return response;
     }
 
     @Transactional
@@ -108,6 +116,7 @@ public class StoreService {
         Store store = storeRepository.findById(storeId)
                 .orElseThrow(() -> NotFoundException.store(storeId));
         store.setStatus(StoreStatus.SUSPENDED);
+        publishIfDeactivated(store);
     }
 
     @Transactional
@@ -126,5 +135,16 @@ public class StoreService {
         }
         store.setStatus(StoreStatus.CANCELED);
         storeRepository.save(store);
+        publishIfDeactivated(store);
+    }
+
+    /**
+     * Published synchronously inside the current transaction: the listener revokes the store's
+     * refresh tokens atomically with the status change.
+     */
+    private void publishIfDeactivated(Store store) {
+        if (store.getStatus() != null && store.getStatus() != StoreStatus.ACTIVE) {
+            eventPublisher.publishEvent(new StoreDeactivatedEvent(store.getId(), store.getStatus()));
+        }
     }
 }

@@ -1,10 +1,12 @@
 package com.amx.grocerystore.core.web;
 
+import com.amx.grocerystore.core.security.AccountInactiveException;
 import com.amx.grocerystore.core.web.dto.ErrorResponse;
 import com.amx.grocerystore.core.web.exception.DuplicateResourceException;
 import com.amx.grocerystore.core.web.exception.InvalidFileException;
 import com.amx.grocerystore.core.web.exception.InvalidResourceStateException;
 import com.amx.grocerystore.core.web.exception.NotFoundException;
+import com.amx.grocerystore.core.web.exception.RefreshTokenException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,6 +38,19 @@ public class GlobalExceptionHandler {
                 : ex.getMessage();
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(code));
+    }
+
+    /** Revoked account detected outside the JWT filter (e.g. on refresh): keep the filter's codes. */
+    @ExceptionHandler(AccountInactiveException.class)
+    public ResponseEntity<ErrorResponse> handleAccountInactive(AccountInactiveException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of(ex.getCode()));
+    }
+
+    @ExceptionHandler(RefreshTokenException.class)
+    public ResponseEntity<ErrorResponse> handleRefreshToken(RefreshTokenException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of(ex.getCode()));
     }
 
     @ExceptionHandler(AuthenticationException.class)

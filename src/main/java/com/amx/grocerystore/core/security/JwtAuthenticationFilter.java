@@ -18,6 +18,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -26,6 +27,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Set;
 import java.util.UUID;
 
 @Component
@@ -34,11 +36,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
 
+    /**
+     * Public store-user auth routes. Skipped so a client that attaches its (possibly expired) access
+     * token to them is never rejected with {@code invalid_token} — refreshing an expired token is the
+     * whole point of {@code /refresh}. Admin login is deliberately untouched.
+     */
+    private static final Set<String> PUBLIC_AUTH_PATHS = Set.of(
+            "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout");
+
     private final JwtService jwtService;
     private final UserRepository userRepository;
     private final StoreRepository storeRepository;
     private final AdminUserRepository adminUserRepository;
     private final JwtAuthenticationEntryPoint authenticationEntryPoint;
+
+    @Override
+    protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        String path = request.getServletPath();
+        return HttpMethod.POST.matches(request.getMethod())
+                && path != null
+                && PUBLIC_AUTH_PATHS.contains(path);
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,

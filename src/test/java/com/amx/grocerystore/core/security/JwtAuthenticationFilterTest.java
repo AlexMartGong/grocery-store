@@ -230,6 +230,63 @@ class JwtAuthenticationFilterTest {
         assertRejected("admin_inactive");
     }
 
+    // ── Public store-user auth routes are skipped ───────────────────────────────
+
+    @Test
+    void refreshRoute_withExpiredBearer_skipsTokenValidation() throws Exception {
+        assertSkipped("/api/v1/auth/refresh");
+    }
+
+    @Test
+    void logoutRoute_withExpiredBearer_skipsTokenValidation() throws Exception {
+        assertSkipped("/api/v1/auth/logout");
+    }
+
+    @Test
+    void loginRoute_withStaleBearer_skipsTokenValidation() throws Exception {
+        assertSkipped("/api/v1/auth/login");
+    }
+
+    @Test
+    void adminLoginRoute_isNotSkipped_flowUnchanged() throws Exception {
+        assertStillValidated("POST", "/api/v1/admin/login");
+    }
+
+    @Test
+    void businessRoute_withExpiredBearer_stillRejected() throws Exception {
+        assertStillValidated("POST", "/api/v1/sales");
+    }
+
+    @Test
+    void getOnRefreshPath_isNotSkipped() throws Exception {
+        assertStillValidated("GET", "/api/v1/auth/refresh");
+    }
+
+    private void assertSkipped(String path) throws Exception {
+        given(request.getMethod()).willReturn("POST");
+        given(request.getServletPath()).willReturn(path);
+        givenBearer();
+        given(jwtService.parse(TOKEN)).willThrow(new JwtException("expired"));
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        verify(jwtService, never()).parse(any());
+        verify(entryPoint, never()).commence(any(), any(), any());
+    }
+
+    private void assertStillValidated(String method, String path) throws Exception {
+        given(request.getMethod()).willReturn(method);
+        given(request.getServletPath()).willReturn(path);
+        givenBearer();
+        given(jwtService.parse(TOKEN)).willThrow(new JwtException("expired"));
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain, never()).doFilter(any(), any());
+        verify(entryPoint).commence(eq(request), eq(response), any(InsufficientAuthenticationException.class));
+    }
+
     private void givenBearer() {
         given(request.getHeader(HttpHeaders.AUTHORIZATION)).willReturn(BEARER);
     }
