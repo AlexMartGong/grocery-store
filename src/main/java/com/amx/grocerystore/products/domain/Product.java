@@ -19,12 +19,20 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * {@code current_stock} is written concurrently by DB triggers (sales / cancellations), so this entity
+ * must never rewrite it from a stale snapshot. {@link DynamicUpdate} limits each UPDATE to the columns
+ * that actually changed: editing the price, image or status leaves {@code current_stock} alone.
+ * Stock deltas go through {@code ProductRepository.addToCurrentStock} (relative, single statement).
+ */
 @Entity
+@DynamicUpdate
 @Table(
         name = "products",
         uniqueConstraints = @UniqueConstraint(columnNames = {"store_id", "barcode"})

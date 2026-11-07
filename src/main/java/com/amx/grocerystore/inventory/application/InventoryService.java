@@ -48,8 +48,9 @@ public class InventoryService {
                 .build();
         inventoryMovementRepository.save(movement);
 
-        product.setCurrentStock(product.getCurrentStock().add(request.quantity()));
-        productRepository.save(product);
+        // Relative UPDATE, never read-modify-write on the entity: a sale committed between the lookup
+        // above and this write would otherwise be silently undone (lost update).
+        productRepository.addToCurrentStock(product.getId(), request.quantity());
 
         if (request.reason() == InventoryReason.LOSS) {
             eventPublisher.publishEvent(

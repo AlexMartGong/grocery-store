@@ -4,6 +4,7 @@ import com.amx.grocerystore.inventory.domain.InventoryReason;
 import com.amx.grocerystore.users.domain.UserRole;
 import lombok.Getter;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Getter
@@ -64,5 +65,19 @@ public class InvalidResourceStateException extends RuntimeException {
     public static InvalidResourceStateException stationLimitExceeded(int maxStations) {
         return new InvalidResourceStateException("station_limit_exceeded",
                 "The store's subscription plan allows at most " + maxStations + " active station(s).");
+    }
+
+    /** Names the product so the PWA can tell the cashier which line to fix. */
+    public static InvalidResourceStateException insufficientStock(String productName,
+                                                                  BigDecimal available,
+                                                                  BigDecimal requested) {
+        return new InvalidResourceStateException("insufficient_stock",
+                "Insufficient stock for \"" + productName + "\": available " + plain(available)
+                        + ", requested " + plain(requested) + ".");
+    }
+
+    /** {@code 3.00 → 3}, {@code 1.500 → 1.5}, {@code 100.00 → 100} (never {@code 1E+2}). */
+    private static String plain(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 }

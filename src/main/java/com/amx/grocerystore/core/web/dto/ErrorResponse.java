@@ -12,6 +12,10 @@ public record ErrorResponse(
         return new ErrorResponse(error, null, null);
     }
 
+    public static ErrorResponse of(String error, String message) {
+        return new ErrorResponse(error, message, null);
+    }
+
     public static ErrorResponse validation(Map<String, String> fields) {
         return new ErrorResponse("validation_failed", null, fields);
     }

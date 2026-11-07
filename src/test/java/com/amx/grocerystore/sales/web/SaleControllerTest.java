@@ -210,6 +210,27 @@ class SaleControllerTest {
 
     @Test
     @WithMockUser(roles = "CASHIER")
+    void post_insufficientStock_returns409WithMessage() throws Exception {
+        given(saleService.createSale(any()))
+                .willThrow(InvalidResourceStateException.insufficientStock(
+                        "Coca-Cola 600ml", new BigDecimal("3.00"), new BigDecimal("5")));
+
+        mvc.perform(post(URL).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "payment_method":"CASH",
+                                  "items":[{"product_id":"%s","quantity":5,"unit_price":18.00}]
+                                }
+                                """.formatted(UUID.randomUUID())))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("insufficient_stock"))
+                .andExpect(jsonPath("$.message")
+                        .value("Insufficient stock for \"Coca-Cola 600ml\": available 3, requested 5."));
+    }
+
+    @Test
+    @WithMockUser(roles = "CASHIER")
     void get_list_returns200() throws Exception {
         UUID id = UUID.randomUUID();
         SaleResponse sale = sample(

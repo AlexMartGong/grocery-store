@@ -297,6 +297,88 @@ class SaleServiceTest {
     }
 
     @Test
+    void createSale_InsufficientStock_ThrowsException() {
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
+                .willReturn(Optional.of(productWithStock(PRODUCT_ID, "Coca-Cola 600ml", new BigDecimal("3.00"))));
+
+        CreateSaleRequest request = new CreateSaleRequest(
+                SalePaymentMethod.CASH,
+                null,
+                null,
+                List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("5"), new BigDecimal("18.00")))
+        );
+
+        try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
+            mocked.when(SecurityUtils::currentStoreId).thenReturn(STORE_ID);
+            mocked.when(SecurityUtils::currentUserId).thenReturn(CASHIER_ID);
+            assertThatThrownBy(() -> saleService.createSale(request))
+                    .isInstanceOf(InvalidResourceStateException.class)
+                    .hasFieldOrPropertyWithValue("code", "insufficient_stock")
+                    .hasMessage("Insufficient stock for \"Coca-Cola 600ml\": available 3, requested 5.");
+        }
+
+        verify(customerRepository, never()).findByIdAndStoreId(any(), any());
+        verify(saleRepository, never()).save(any());
+    }
+
+    @Test
+    void createSale_DuplicateLines_AggregatedExceedsStock_ThrowsException() {
+        // Each line alone fits (3 ≤ 5) but the same product scanned twice needs 6.
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
+                .willReturn(Optional.of(productWithStock(PRODUCT_ID, "Bulk beans", new BigDecimal("5.00"))));
+
+        CreateSaleRequest request = new CreateSaleRequest(
+                SalePaymentMethod.CASH,
+                null,
+                null,
+                List.of(
+                        new SaleItemRequest(PRODUCT_ID, new BigDecimal("3"), new BigDecimal("10.00")),
+                        new SaleItemRequest(PRODUCT_ID, new BigDecimal("3"), new BigDecimal("10.00"))
+                )
+        );
+
+        try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
+            mocked.when(SecurityUtils::currentStoreId).thenReturn(STORE_ID);
+            mocked.when(SecurityUtils::currentUserId).thenReturn(CASHIER_ID);
+            assertThatThrownBy(() -> saleService.createSale(request))
+                    .isInstanceOf(InvalidResourceStateException.class)
+                    .hasFieldOrPropertyWithValue("code", "insufficient_stock")
+                    .hasMessageContaining("Bulk beans")
+                    .hasMessageContaining("available 5")
+                    .hasMessageContaining("requested 6");
+        }
+
+        verify(productRepository).findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID);
+        verify(saleRepository, never()).save(any());
+    }
+
+    @Test
+    void createSale_StockExactlyEqualToRequested_Success() {
+        given(productRepository.findByIdAndStoreIdAndActiveTrue(PRODUCT_ID, STORE_ID))
+                .willReturn(Optional.of(productWithStock(PRODUCT_ID, "Sliced ham", new BigDecimal("1.50"))));
+        given(saleRepository.save(any(Sale.class))).willAnswer(inv -> {
+            Sale s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CreateSaleRequest request = new CreateSaleRequest(
+                SalePaymentMethod.CASH,
+                null,
+                null,
+                List.of(new SaleItemRequest(PRODUCT_ID, new BigDecimal("1.500"), new BigDecimal("180.00")))
+        );
+
+        try (MockedStatic<SecurityUtils> mocked = mockStatic(SecurityUtils.class)) {
+            mocked.when(SecurityUtils::currentStoreId).thenReturn(STORE_ID);
+            mocked.when(SecurityUtils::currentUserId).thenReturn(CASHIER_ID);
+            saleService.createSale(request);
+        }
+
+        verify(saleRepository).save(any(Sale.class));
+    }
+
+    @Test
     void list_returnsPagedResponseScopedToStore() {
         Pageable pageable = PageRequest.of(0, 20);
         Sale sale = Sale.builder()
@@ -326,12 +408,16 @@ class SaleServiceTest {
     }
 
     private Product activeProduct(UUID id) {
+        return productWithStock(id, "Producto " + id, new BigDecimal("100.00"));
+    }
+
+    private Product productWithStock(UUID id, String name, BigDecimal stock) {
         return Product.builder()
                 .id(id)
                 .storeId(STORE_ID)
-                .name("Producto " + id)
+                .name(name)
                 .salePrice(new BigDecimal("10.00"))
-                .currentStock(new BigDecimal("100.00"))
+                .currentStock(stock)
                 .minimumStock(new BigDecimal("0.00"))
                 .unitOfMeasure(UnitOfMeasure.PIECE)
                 .active(true)
