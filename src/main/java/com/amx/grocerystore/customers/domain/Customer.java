@@ -15,12 +15,20 @@ import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
+/**
+ * {@code outstanding_balance} is written concurrently by DB triggers ({@code fn_register_credit},
+ * {@code fn_apply_payment}, {@code fn_cancel_sale}), so this entity must never rewrite it from a stale
+ * snapshot. {@link DynamicUpdate} limits each UPDATE to the columns that actually changed: editing the
+ * name, phone, credit limit or status leaves {@code outstanding_balance} alone.
+ */
 @Entity
+@DynamicUpdate
 @Table(name = "customers")
 @Getter
 @Setter

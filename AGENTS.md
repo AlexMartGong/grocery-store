@@ -313,10 +313,11 @@ Verified on PostgreSQL 16 with a sale committed on another connection mid-transa
 10 − 3 + 5 → 15 (sale lost), `addToCurrentStock` → 12; price edit after a concurrent sale keeps the sale's stock.
 **Residual by design:** `PUT /api/v1/products/{id}` requires `current_stock` and sets it absolutely when it differs
 from the DB value — a form loaded before later sales and submitted with its old stock overwrites them. Stock
-corrections should go through `POST /api/v1/inventory/movements` (`ADJUSTMENT`). **Known gap (not fixed yet):**
-`Customer.outstandingBalance` (owned by `fn_register_credit`/`fn_apply_payment`/`fn_cancel_sale`) has the same
-exposure — `Customer` has no `@DynamicUpdate`, so `CustomerService.update`/`softDelete` rewrite the balance loaded at
-tx start and can undo a concurrent credit sale or payment.
+corrections should go through `POST /api/v1/inventory/movements` (`ADJUSTMENT`). **Same rule for
+`Customer.outstandingBalance`** (owned by `fn_register_credit`/`fn_apply_payment`/`fn_cancel_sale`, all relative):
+`Customer` carries `@DynamicUpdate` so `CustomerService.update`/`softDelete` never rewrite the balance. Verified on
+PostgreSQL 16 — without it, a credit-limit edit erased a concurrent 100 credit sale (balance 0) and a soft delete
+reverted a concurrent 40 payment (balance 100); with it, 100 and 60.
 
 **Inventory movement endpoint:** `POST /api/v1/inventory/movements` (`OWNER`/`CASHIER`) — manual stock adjustment via
 `AdjustStockRequest` (`productId`, `quantity` signed BigDecimal, `reason`, optional `notes`). Returns 201 with no body.
@@ -706,8 +707,9 @@ Strictly adhere to SOLID in every implementation:
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on
-  entities** (breaks with lazy proxies). `Product` also carries Hibernate `@DynamicUpdate` because `current_stock` is
-  trigger-owned and written concurrently (see Product stock concurrency). For services/components prefer `@RequiredArgsConstructor` with `final` fields.
+  entities** (breaks with lazy proxies). `Product` and `Customer` also carry Hibernate `@DynamicUpdate` because
+  `current_stock` / `outstanding_balance` are trigger-owned and written concurrently (see Product stock concurrency) —
+  any future entity with a trigger-owned column needs it too. For services/components prefer `@RequiredArgsConstructor` with `final` fields.
 - **Validation:** Apply Bean Validation on all DTOs and entities.
 - **Entity conventions:**
     - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety
