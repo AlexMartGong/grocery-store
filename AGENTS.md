@@ -194,6 +194,11 @@ CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `G
 **Products extra endpoint:** `GET /api/v1/products/search?barcode={barcode}` — lookup active product by barcode within
 the current store's tenant scope. Returns `product_not_found` if missing or inactive.
 
+**Products edit endpoint:** `PUT /api/v1/products/{id}` (`OWNER`) — full edit via `UpdateProductRequest` (`barcode`,
+`name`, `purchase_cost`, `sale_price`, `minimum_stock`, `unit_of_measure`) — **no `current_stock`**; a legacy
+`current_stock` in the body is ignored. Stock is changed only via `POST /api/v1/inventory/movements` (see Product stock
+concurrency). `POST /api/v1/products` keeps `ProductRequest` with the initial `current_stock`.
+
 **Products quick-update endpoint:** `PATCH /api/v1/products/{id}/price` (`OWNER`) — partial price update via
 `UpdateProductPricesRequest`. Both `sale_price` and `purchase_cost` are optional (`@PositiveOrZero`); only non-null
 fields are written. No-op if both null. Product must be active; returns `product_not_found` if not. When the **sale
@@ -311,9 +316,12 @@ JPQL `SET p.currentStock = p.currentStock + :delta`, single statement, row lock 
 `clearAutomatically` (same reason as the refresh-token bulk updates). Never `setCurrentStock(getCurrentStock().add(...))`.
 Verified on PostgreSQL 16 with a sale committed on another connection mid-transaction: old read-modify-write
 10 − 3 + 5 → 15 (sale lost), `addToCurrentStock` → 12; price edit after a concurrent sale keeps the sale's stock.
-**Residual by design:** `PUT /api/v1/products/{id}` requires `current_stock` and sets it absolutely when it differs
-from the DB value — a form loaded before later sales and submitted with its old stock overwrites them. Stock
-corrections should go through `POST /api/v1/inventory/movements` (`ADJUSTMENT`). **Same rule for
+(3) `PUT /api/v1/products/{id}` never touches stock: it binds `UpdateProductRequest`, which has **no
+`current_stock`** (`ProductRequest` — with the initial stock — is for `POST` only), so an edit form loaded before later
+sales can no longer overwrite them. A client still sending `current_stock` is accepted and the field ignored (Boot's
+Jackson does not fail on unknown properties — covered by `ProductControllerTest`). Stock changes go only through
+`POST /api/v1/inventory/movements`, which also writes the ledger row. Verified on PostgreSQL 16: stock 10, a sale of 2
+after the form loaded and one of 3 during the PUT → 5, with price and minimum updated. **Same rule for
 `Customer.outstandingBalance`** (owned by `fn_register_credit`/`fn_apply_payment`/`fn_cancel_sale`, all relative):
 `Customer` carries `@DynamicUpdate` so `CustomerService.update`/`softDelete` never rewrite the balance. Verified on
 PostgreSQL 16 — without it, a credit-limit edit erased a concurrent 100 credit sale (balance 0) and a soft delete

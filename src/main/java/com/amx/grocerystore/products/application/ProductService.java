@@ -12,6 +12,7 @@ import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
 import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
+import com.amx.grocerystore.products.web.dto.UpdateProductRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -78,7 +79,7 @@ public class ProductService {
     }
 
     @Transactional
-    public ProductResponse update(UUID id, ProductRequest request) {
+    public ProductResponse update(UUID id, UpdateProductRequest request) {
         UUID storeId = SecurityUtils.currentStoreId();
         Product product = productRepository.findByIdAndStoreId(id, storeId)
                 .orElseThrow(() -> NotFoundException.product(id));
@@ -90,7 +91,8 @@ public class ProductService {
         product.setName(request.name());
         product.setPurchaseCost(request.purchaseCost());
         product.setSalePrice(request.salePrice());
-        product.setCurrentStock(request.currentStock());
+        // current_stock is never set here (see UpdateProductRequest): with @DynamicUpdate the UPDATE
+        // leaves the trigger-owned column alone, so concurrent sales are never overwritten.
         product.setMinimumStock(request.minimumStock());
         product.setUnitOfMeasure(request.unitOfMeasure());
         return ProductResponse.from(productRepository.save(product));

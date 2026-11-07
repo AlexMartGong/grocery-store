@@ -5,6 +5,7 @@ import com.amx.grocerystore.products.application.ProductService;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
 import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
+import com.amx.grocerystore.products.web.dto.UpdateProductRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
@@ -61,7 +62,7 @@ public class ProductController {
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('OWNER')")
     public ResponseEntity<ProductResponse> update(@PathVariable UUID id,
-                                                  @Valid @RequestBody ProductRequest request) {
+                                                  @Valid @RequestBody UpdateProductRequest request) {
         return ResponseEntity.ok(productService.update(id, request));
     }
 

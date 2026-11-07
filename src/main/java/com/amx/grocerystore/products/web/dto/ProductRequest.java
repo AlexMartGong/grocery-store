@@ -9,6 +9,10 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 
+/**
+ * Body of {@code POST /api/v1/products} only: {@code current_stock} is the initial stock. Updates use
+ * {@link UpdateProductRequest}, which has no stock field.
+ */
 public record ProductRequest(
         @Size(max = 50)
         String barcode,
