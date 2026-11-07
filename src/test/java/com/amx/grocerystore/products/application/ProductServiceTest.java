@@ -12,6 +12,7 @@ import com.amx.grocerystore.products.domain.UnitOfMeasure;
 import com.amx.grocerystore.products.domain.events.ProductPriceChangedEvent;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.products.web.dto.ProductRequest;
+import com.amx.grocerystore.products.web.dto.UpdateProductRequest;
 import com.amx.grocerystore.products.web.dto.ProductResponse;
 import com.amx.grocerystore.products.web.dto.UpdateProductPricesRequest;
 import com.amx.grocerystore.users.domain.UserRole;
@@ -87,6 +88,17 @@ class ProductServiceTest {
                 .unitOfMeasure(UnitOfMeasure.PIECE)
                 .active(active)
                 .build();
+    }
+
+    private UpdateProductRequest updateRequest(String barcode) {
+        return new UpdateProductRequest(
+                barcode,
+                "Leche 1L",
+                new BigDecimal("15.00"),
+                new BigDecimal("20.00"),
+                new BigDecimal("5.00"),
+                UnitOfMeasure.PIECE
+        );
     }
 
     private ProductRequest request(String barcode) {
@@ -222,7 +234,7 @@ class ProductServiceTest {
         given(productRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(product(id, true)));
         given(productRepository.existsByStoreIdAndBarcodeAndIdNot(TENANT_ID, "NEW_CODE", id)).willReturn(true);
 
-        ProductRequest req = request("NEW_CODE");
+        UpdateProductRequest req = updateRequest("NEW_CODE");
 
         assertThatThrownBy(() -> productService.update(id, req))
                 .isInstanceOf(DuplicateResourceException.class)
@@ -232,23 +244,26 @@ class ProductServiceTest {
     }
 
     @Test
-    void update_happyPath_mutatesFieldsAndSaves() {
+    void update_happyPath_mutatesFieldsAndSavesButNeverTouchesStock() {
         UUID id = UUID.randomUUID();
         Product existing = product(id, true);
         given(productRepository.findByIdAndStoreId(id, TENANT_ID)).willReturn(Optional.of(existing));
         given(productRepository.existsByStoreIdAndBarcodeAndIdNot(TENANT_ID, "7501000000001", id)).willReturn(false);
         given(productRepository.save(any(Product.class))).willAnswer(inv -> inv.getArgument(0));
 
-        ProductRequest req = new ProductRequest(
+        UpdateProductRequest req = new UpdateProductRequest(
                 "7501000000001",
                 "Leche 1L Nueva",
                 new BigDecimal("16.00"),
                 new BigDecimal("22.50"),
-                new BigDecimal("12.00"),
                 new BigDecimal("3.00"),
                 UnitOfMeasure.KILO
         );
         ProductResponse response = productService.update(id, req);
+
+        // Stock is trigger-owned: the edit must leave the loaded value untouched (no dirty column).
+        assertThat(existing.getCurrentStock()).isEqualByComparingTo("10.00");
+        assertThat(existing.getMinimumStock()).isEqualByComparingTo("3.00");
 
         assertThat(existing.getName()).isEqualTo("Leche 1L Nueva");
         assertThat(existing.getUnitOfMeasure()).isEqualTo(UnitOfMeasure.KILO);

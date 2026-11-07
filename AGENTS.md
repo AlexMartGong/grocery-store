@@ -149,7 +149,7 @@ long-lived access token):**
 
 `core.web.GlobalExceptionHandler` is the single `@RestControllerAdvice` (no per-controller advices).
 Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). Factories: `ErrorResponse.of(code)`,
-`ErrorResponse.validation(fields)`.
+`ErrorResponse.of(code, message)`, `ErrorResponse.validation(fields)`.
 
 | Exception | Status | `error` code |
 |-|-|-|
@@ -160,7 +160,7 @@ Error DTO: `core.web.dto.ErrorResponse` record (`error`, `message`, `fields`). F
 | `MethodArgumentNotValidException` | 400 | `validation_failed` + `fields` |
 | `NotFoundException` | 404 | from `ex.getCode()` (e.g. `store_not_found`, `user_not_found`, `product_not_found`, `customer_not_found`, `open_shift_not_found`, `sale_not_found`, `station_not_found`, `subscription_not_found`, `plan_not_found`) |
 | `DuplicateResourceException` | 409 | from `ex.getCode()` (e.g. `store_code_taken`, `username_taken`, `store_owner_exists`, `barcode_taken`) |
-| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`, `station_limit_exceeded`) |
+| `InvalidResourceStateException` | 409 | from `ex.getCode()` (e.g. `store_not_active`, `role_not_allowed`, `reason_not_allowed`, `customer_required`, `credit_limit_exceeded`, `invalid_mixed_payment`, `shift_already_open`, `shift_not_open`, `sale_already_canceled`, `station_limit_exceeded`, `insufficient_stock`) — **body also carries `message`** = `ex.getMessage()` (the only handler that does; e.g. `insufficient_stock` names the product for the cashier) |
 | `InvalidFileException` | 400 | from `ex.getCode()` (`file_required`, `image_type_not_allowed`, `image_too_large`) |
 | `MaxUploadSizeExceededException` | 400 | `image_too_large` (container multipart-limit backstop) |
 | `DataIntegrityViolationException` | 409 | `conflict` |
@@ -193,6 +193,11 @@ CRUD endpoints follow the same shape: `POST` (201 + `Location`), `GET /{id}`, `G
 
 **Products extra endpoint:** `GET /api/v1/products/search?barcode={barcode}` — lookup active product by barcode within
 the current store's tenant scope. Returns `product_not_found` if missing or inactive.
+
+**Products edit endpoint:** `PUT /api/v1/products/{id}` (`OWNER`) — full edit via `UpdateProductRequest` (`barcode`,
+`name`, `purchase_cost`, `sale_price`, `minimum_stock`, `unit_of_measure`) — **no `current_stock`**; a legacy
+`current_stock` in the body is ignored. Stock is changed only via `POST /api/v1/inventory/movements` (see Product stock
+concurrency). `POST /api/v1/products` keeps `ProductRequest` with the initial `current_stock`.
 
 **Products quick-update endpoint:** `PATCH /api/v1/products/{id}/price` (`OWNER`) — partial price update via
 `UpdateProductPricesRequest`. Both `sale_price` and `purchase_cost` are optional (`@PositiveOrZero`); only non-null
@@ -273,10 +278,13 @@ endpoints accept optional filters as `@RequestParam` (`status` for stores; `acti
 `InvalidResourceStateException.storeNotActive(id)`, `InvalidResourceStateException.reasonNotAllowed(reason)`,
 `InvalidResourceStateException.customerRequiredForCredit()`, `InvalidResourceStateException.creditLimitExceeded()`,
 `InvalidResourceStateException.invalidMixedPayment()`, `InvalidResourceStateException.shiftAlreadyOpen()`,
-`InvalidResourceStateException.shiftNotOpen()`, `InvalidResourceStateException.saleAlreadyCanceled()`). Add new
+`InvalidResourceStateException.shiftNotOpen()`, `InvalidResourceStateException.saleAlreadyCanceled()`,
+`InvalidResourceStateException.insufficientStock(productName, available, requested)`). Add new
 factories here rather than instantiating with raw
 strings. Use `InvalidResourceStateException` for precondition failures on existing resources (wrong status,
-disallowed role, disallowed inventory reason, invalid payment split, etc.) — distinct from
+disallowed role, disallowed inventory reason, invalid payment split, insufficient stock, etc.). Its message reaches
+the client (`ErrorResponse.message`), so keep it free of internals. Messages are English like every factory (the PWA
+keys on `error` and may localize); numbers via `stripTrailingZeros().toPlainString()`. Distinct from
 `DuplicateResourceException` (uniqueness conflicts) and `NotFoundException` (missing). `InvalidFileException` (400)
 covers rejected multipart uploads (empty file, disallowed MIME type, oversize) — factories `emptyFile()`,
 `imageTypeNotAllowed()`, `imageTooLarge()`. `RefreshTokenException` (401) covers rejected store-user refresh tokens —
@@ -299,11 +307,33 @@ from the balance which is trigger-only. Same `findCustomers` `@Query` shape as `
 sentinels). `Customer ↔ CustomerPayment` colocated in `customers.domain`; `CustomerPayment.customer` is the only
 intra-aggregate `@ManyToOne` (cross-module FKs stay as plain UUIDs per FK Strategy).
 
+**Product stock concurrency (mandatory):** `products.current_stock` is written concurrently by triggers
+(`fn_apply_sale_item`, `fn_cancel_sale`), so Java must never write it back from a stale snapshot. (1) `Product` carries
+`@DynamicUpdate` — each UPDATE lists only the columns that changed, so a price PATCH, image upload/delete, soft delete
+or an edit that leaves stock untouched never rewrites `current_stock`. **Do not remove it** (without it Hibernate
+rewrites every column). (2) Stock deltas go through `ProductRepository.addToCurrentStock(id, delta)` — `@Modifying`
+JPQL `SET p.currentStock = p.currentStock + :delta`, single statement, row lock serializes it with sales; no
+`clearAutomatically` (same reason as the refresh-token bulk updates). Never `setCurrentStock(getCurrentStock().add(...))`.
+Verified on PostgreSQL 16 with a sale committed on another connection mid-transaction: old read-modify-write
+10 − 3 + 5 → 15 (sale lost), `addToCurrentStock` → 12; price edit after a concurrent sale keeps the sale's stock.
+(3) `PUT /api/v1/products/{id}` never touches stock: it binds `UpdateProductRequest`, which has **no
+`current_stock`** (`ProductRequest` — with the initial stock — is for `POST` only), so an edit form loaded before later
+sales can no longer overwrite them. A client still sending `current_stock` is accepted and the field ignored (Boot's
+Jackson does not fail on unknown properties — covered by `ProductControllerTest`). Stock changes go only through
+`POST /api/v1/inventory/movements`, which also writes the ledger row. Verified on PostgreSQL 16: stock 10, a sale of 2
+after the form loaded and one of 3 during the PUT → 5, with price and minimum updated. **Same rule for
+`Customer.outstandingBalance`** (owned by `fn_register_credit`/`fn_apply_payment`/`fn_cancel_sale`, all relative):
+`Customer` carries `@DynamicUpdate` so `CustomerService.update`/`softDelete` never rewrite the balance. Verified on
+PostgreSQL 16 — without it, a credit-limit edit erased a concurrent 100 credit sale (balance 0) and a soft delete
+reverted a concurrent 40 payment (balance 100); with it, 100 and 60.
+
 **Inventory movement endpoint:** `POST /api/v1/inventory/movements` (`OWNER`/`CASHIER`) — manual stock adjustment via
 `AdjustStockRequest` (`productId`, `quantity` signed BigDecimal, `reason`, optional `notes`). Returns 201 with no body.
 `quantity` is a signed ledger delta: positive = stock in, negative = stock out. Rejects `SALE` and `CANCELLATION`
 reasons (`reason_not_allowed` 409) — those are owned by DB triggers `fn_apply_sale_item` / `fn_cancel_sale`. Allowed
-reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock going negative is rejected by DB CHECK → 409
+reasons for this endpoint: `RESTOCK`, `LOSS`, `ADJUSTMENT`. Stock is applied via the relative
+`ProductRepository.addToCurrentStock(id, delta)` — never read-modify-write on the entity (see Product stock
+concurrency). Stock going negative is rejected by DB CHECK → 409
 `conflict`. `InventoryReason` enum colocated in `inventory.domain`. After save, when `reason == LOSS`, publishes
 `InventoryLossEvent(productName, quantity, notes)` via `ApplicationEventPublisher` for the shrinkage alert.
 
@@ -357,6 +387,20 @@ for the anti-fraud WhatsApp alert. Carries the same `@Retryable` deadlock policy
 **Sales endpoint:** `POST /api/v1/sales` (`OWNER`/`CASHIER`) — `CreateSaleRequest`
 (`payment_method`, optional `customer_id`, optional `amount_paid` `@PositiveOrZero`, `items[]`). Returns 201 +
 `SaleResponse`. `total = Σ(quantity × unitPrice)` rounded `HALF_UP` to scale 2.
+**Stock pre-validation (mandatory):** before any INSERT, `SaleService.validateStock` sums requested quantities per
+`productId` (`LinkedHashMap.merge` — a product on several lines is checked as one total), loads each distinct product
+(`findByIdAndStoreIdAndActiveTrue` → 404 `product_not_found`) and throws 409 `insufficient_stock` when
+`currentStock < requested` (equal passes), with `message`
+`Insufficient stock for "<name>": available <n>, requested <m>.` Not in `retryFor` → no retry. Without it,
+`chk_positive_stock` (SQLState 23514 inside `fn_apply_sale_item`) → `DataIntegrityViolationException` → 3 futile
+retries → generic `conflict`. The read is unlocked; the trigger is the concurrency safety net: `fn_apply_sale_item`
+reads stock with `SELECT … FOR NO KEY UPDATE` and decrements relatively (`current_stock - NEW.quantity`), so
+concurrent sales of the same product serialize on the row — two cashiers selling the last units → the second trips
+the CHECK → `@Retryable` re-runs in a fresh tx → `validateStock` re-reads → `insufficient_stock`. **Never revert to a
+plain `SELECT` + absolute `SET`** — under READ COMMITTED that loses updates (verified on PostgreSQL 16: stock
+10 − 3 − 3 left 7; stock 5 sold 6 units, CHECK never fired). `FOR NO KEY UPDATE` (not `FOR UPDATE`) = the lock the
+UPDATE takes anyway, so FK `KEY SHARE` checks on `product_id` are not blocked. Java-side stock writes follow the same
+rule — see **Product stock concurrency**.
 **Tenant scoping (VULN-01):** a non-null `customer_id` is validated against the store via
 `customerRepository.findByIdAndStoreId(...)` **before** the payment switch — for **every** method, not just
 CREDIT/MIXED — so a cross-store customer returns 404 `customer_not_found`; the loaded `Customer` is reused by the
@@ -580,7 +624,17 @@ it. Verified end-to-end: legacy schema → migration → `ddl-auto=validate` boo
 2026-11-01-refresh-tokens.sql`. Idempotent (`IF NOT EXISTS`) + transactional. Verified: legacy schema → migration ×2 →
 `ddl-auto=validate` boots clean, and the resulting table is identical to a fresh `script.sql`. **Rollout:** follow the
 official order in Deployment & CI → *Refresh-token rollout*. Note: the `2026-08-10`/`2026-08-11` migration files
-referenced in the Subscriptions section were never committed; `migrations/` now exists with the refresh-token file only.
+referenced in the Subscriptions section were never committed; `migrations/` holds the refresh-token and atomic-stock
+files only.
+
+**Live-DB migration (atomic sale-item stock):** `src/main/resources/migrations/2026-11-06-atomic-sale-item-stock.sql`
+replaces `fn_apply_sale_item` with the row-locking, relative-decrement version (see Sales endpoint). Function body
+only — no schema change, so `ddl-auto=validate` is unaffected and it can be applied **before or after any deploy** (the
+trigger references the function by name; no need to recreate it). Same `scp` + `docker exec -i ventacore-db psql -U
+postgres -d grocerystore -v ON_ERROR_STOP=1 < 2026-11-06-atomic-sale-item-stock.sql`. Idempotent (`CREATE OR
+REPLACE`) + transactional. Verified on PostgreSQL 16: old function reproduces the lost update → migration ×2 →
+concurrent 10 − 3 − 3 = 4 (ledger matches) and the last-units race rejects the second sale with `chk_positive_stock`;
+resulting `pg_get_functiondef` identical to a fresh `script.sql`.
 
 ### Audit Module
 
@@ -661,7 +715,9 @@ Strictly adhere to SOLID in every implementation:
 - **Modern Java:** Leverage Java 21 features — `records`, `sealed classes`, and `switch` pattern matching.
 - **Boilerplate:** Use Lombok. For entities:
   `@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor @EqualsAndHashCode(of = "id")` — **avoid `@Data` on
-  entities** (breaks with lazy proxies). For services/components prefer `@RequiredArgsConstructor` with `final` fields.
+  entities** (breaks with lazy proxies). `Product` and `Customer` also carry Hibernate `@DynamicUpdate` because
+  `current_stock` / `outstanding_balance` are trigger-owned and written concurrently (see Product stock concurrency) —
+  any future entity with a trigger-owned column needs it too. For services/components prefer `@RequiredArgsConstructor` with `final` fields.
 - **Validation:** Apply Bean Validation on all DTOs and entities.
 - **Entity conventions:**
     - PK: `UUID id` + `@GeneratedValue(strategy = GenerationType.UUID)`. DB default `gen_random_uuid()` stays as safety

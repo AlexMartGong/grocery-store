@@ -86,10 +86,11 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of(ex.getCode()));
     }
 
+    /** Carries the factory's human-readable message too (e.g. which product is out of stock). */
     @ExceptionHandler(InvalidResourceStateException.class)
     public ResponseEntity<ErrorResponse> handleInvalidState(InvalidResourceStateException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of(ex.getCode()));
+                .body(ErrorResponse.of(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(InvalidFileException.class)

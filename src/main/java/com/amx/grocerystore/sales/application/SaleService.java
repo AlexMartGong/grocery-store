@@ -10,6 +10,7 @@ import com.amx.grocerystore.inventory.domain.events.LowStockEvent;
 import com.amx.grocerystore.notifications.domain.Notification;
 import com.amx.grocerystore.notifications.domain.NotificationType;
 import com.amx.grocerystore.notifications.infrastructure.NotificationRepository;
+import com.amx.grocerystore.products.domain.Product;
 import com.amx.grocerystore.products.infrastructure.ProductRepository;
 import com.amx.grocerystore.sales.domain.Sale;
 import com.amx.grocerystore.sales.domain.SaleCancellation;
@@ -42,7 +43,9 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -73,10 +76,7 @@ public class SaleService {
         UUID cashierId = SecurityUtils.currentUserId();
         SalePaymentMethod method = request.paymentMethod();
 
-        for (SaleItemRequest item : request.items()) {
-            productRepository.findByIdAndStoreIdAndActiveTrue(item.productId(), storeId)
-                    .orElseThrow(() -> NotFoundException.product(item.productId()));
-        }
+        validateStock(storeId, request.items());
 
         BigDecimal total = request.items().stream()
                 .map(i -> i.quantity().multiply(i.unitPrice()))
@@ -202,6 +202,33 @@ public class SaleService {
         Page<Sale> page = saleRepository.findSales(
                 storeId, customerId, paymentMethod, searchTerm, from, to, pageable);
         return PageResponse.from(page.map(SaleResponse::from));
+    }
+
+    /**
+     * Checks every product exists in the store and has enough stock for the sale, before any INSERT.
+     * Quantities are summed per product so a product scanned on several lines is checked as one total.
+     * <p>
+     * Throwing {@code insufficient_stock} here keeps the sale out of {@code chk_positive_stock}
+     * ({@code fn_apply_sale_item}): that CHECK surfaces as a {@code DataIntegrityViolationException},
+     * which {@code @Retryable} would retry in vain before answering a generic {@code conflict}.
+     * {@code InvalidResourceStateException} is not in {@code retryFor}, so it is never retried.
+     * The read is not locked; the trigger is the safety net for concurrent sales: it locks the product
+     * row, so when two cashiers sell the last units at once the second trips the CHECK, is retried in
+     * a fresh transaction, re-reads the stock here and fails with {@code insufficient_stock}.
+     */
+    private void validateStock(UUID storeId, List<SaleItemRequest> items) {
+        Map<UUID, BigDecimal> requestedByProduct = new LinkedHashMap<>();
+        for (SaleItemRequest item : items) {
+            requestedByProduct.merge(item.productId(), item.quantity(), BigDecimal::add);
+        }
+        requestedByProduct.forEach((productId, requested) -> {
+            Product product = productRepository.findByIdAndStoreIdAndActiveTrue(productId, storeId)
+                    .orElseThrow(() -> NotFoundException.product(productId));
+            if (product.getCurrentStock().compareTo(requested) < 0) {
+                throw InvalidResourceStateException.insufficientStock(
+                        product.getName(), product.getCurrentStock(), requested);
+            }
+        });
     }
 
     private void publishLowStockEvents(UUID storeId) {

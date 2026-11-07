@@ -331,9 +331,18 @@ CREATE INDEX idx_subscriptions_billing ON subscriptions (next_billing_date) WHER
 -- =====================================================================
 
 -- 1) On sale_items insert:
---    - decrement product stock
+--    - decrement product stock (atomically)
 --    - log inventory movement
 --    - raise notification if crossing minimum threshold
+--
+--    The stock read MUST lock the row (FOR NO KEY UPDATE). A plain SELECT followed by an absolute SET
+--    loses updates under READ COMMITTED: two concurrent sales both read the same stock and the second
+--    overwrites the first (oversell, chk_positive_stock never fires, ledger drifts from stock). With
+--    the lock, the second sale waits for the first to commit and then reads its result, so the loser of
+--    a last-units race trips chk_positive_stock instead. FOR NO KEY UPDATE is the same lock the UPDATE
+--    takes anyway (FOR UPDATE would also block the FOR KEY SHARE taken by FK checks on product_id).
+--    The SET is relative too, so it stays correct even if the lock is ever dropped.
+--    Live DBs: migrations/2026-11-06-atomic-sale-item-stock.sql.
 CREATE
     OR
     REPLACE FUNCTION fn_apply_sale_item() RETURNS TRIGGER AS
@@ -348,12 +357,13 @@ BEGIN
     SELECT current_stock, minimum_stock, store_id, name
     INTO v_stock_before, v_min_stock, v_store_id, v_product_name
     FROM products
-    WHERE id = NEW.product_id;
+    WHERE id = NEW.product_id
+        FOR NO KEY UPDATE;
 
     v_stock_after := v_stock_before - NEW.quantity;
 
     UPDATE products
-    SET current_stock = v_stock_after,
+    SET current_stock = current_stock - NEW.quantity,
         updated_at    = NOW()
     WHERE id = NEW.product_id;
 
